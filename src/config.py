@@ -628,6 +628,18 @@ class Config:
     # 是否保存分析上下文快照（用于历史回溯）
     save_context_snapshot: bool = True
 
+    # === 选股扫描配置 ===
+    scan_bias_threshold: float = 5.0
+    scan_gain_min: float = 5.0
+    scan_gain_max: float = 30.0
+    scan_volume_ratio_min: float = 1.2
+    scan_score_threshold: int = 50
+    scan_top_quant: int = 20
+    scan_top_final: int = 10
+    scan_batch_size: int = 50
+    scan_batch_interval: int = 2
+    scan_history_days: int = 120
+
     # === 回测配置 ===
     backtest_enabled: bool = True
     backtest_eval_window_days: int = 10
@@ -1227,6 +1239,16 @@ class Config:
             prefetch_realtime_quotes=os.getenv('PREFETCH_REALTIME_QUOTES', 'true').lower() == 'true',
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
             save_context_snapshot=os.getenv('SAVE_CONTEXT_SNAPSHOT', 'true').lower() == 'true',
+            scan_bias_threshold=parse_env_float(os.getenv('SCAN_BIAS_THRESHOLD'), 5.0, field_name='SCAN_BIAS_THRESHOLD', minimum=0.0),
+            scan_gain_min=parse_env_float(os.getenv('SCAN_GAIN_MIN'), 5.0, field_name='SCAN_GAIN_MIN', minimum=0.0),
+            scan_gain_max=parse_env_float(os.getenv('SCAN_GAIN_MAX'), 30.0, field_name='SCAN_GAIN_MAX', minimum=0.0),
+            scan_volume_ratio_min=parse_env_float(os.getenv('SCAN_VOLUME_RATIO_MIN'), 1.2, field_name='SCAN_VOLUME_RATIO_MIN', minimum=0.0),
+            scan_score_threshold=parse_env_int(os.getenv('SCAN_SCORE_THRESHOLD'), 50, field_name='SCAN_SCORE_THRESHOLD', minimum=0),
+            scan_top_quant=parse_env_int(os.getenv('SCAN_TOP_QUANT'), 20, field_name='SCAN_TOP_QUANT', minimum=1),
+            scan_top_final=parse_env_int(os.getenv('SCAN_TOP_FINAL'), 10, field_name='SCAN_TOP_FINAL', minimum=1),
+            scan_batch_size=parse_env_int(os.getenv('SCAN_BATCH_SIZE'), 50, field_name='SCAN_BATCH_SIZE', minimum=1),
+            scan_batch_interval=parse_env_int(os.getenv('SCAN_BATCH_INTERVAL'), 2, field_name='SCAN_BATCH_INTERVAL', minimum=0),
+            scan_history_days=parse_env_int(os.getenv('SCAN_HISTORY_DAYS'), 120, field_name='SCAN_HISTORY_DAYS', minimum=1),
             backtest_enabled=os.getenv('BACKTEST_ENABLED', 'true').lower() == 'true',
             backtest_eval_window_days=parse_env_int(os.getenv('BACKTEST_EVAL_WINDOW_DAYS'), 10, field_name='BACKTEST_EVAL_WINDOW_DAYS', minimum=1),
             backtest_min_age_days=parse_env_int(os.getenv('BACKTEST_MIN_AGE_DAYS'), 14, field_name='BACKTEST_MIN_AGE_DAYS', minimum=1),

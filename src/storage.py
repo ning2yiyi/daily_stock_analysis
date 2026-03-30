@@ -620,6 +620,42 @@ class LLMUsage(Base):
     called_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class ScannerCandidate(Base):
+    """选股扫描候选结果"""
+
+    __tablename__ = 'scanner_candidates'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(String(64), nullable=False, index=True)
+    code = Column(String(16), nullable=False)
+    name = Column(String(64), nullable=True)
+    market = Column(String(8), nullable=False)  # us / cn
+    quant_score = Column(Float, nullable=False, default=0.0)
+    ma_score = Column(Float, nullable=False, default=0.0)
+    bias_score = Column(Float, nullable=False, default=0.0)
+    volume_score = Column(Float, nullable=False, default=0.0)
+    gain_score = Column(Float, nullable=False, default=0.0)
+    current_price = Column(Float, nullable=True)
+    ma5 = Column(Float, nullable=True)
+    ma10 = Column(Float, nullable=True)
+    ma20 = Column(Float, nullable=True)
+    bias_ma5 = Column(Float, nullable=True)
+    volume_ratio = Column(Float, nullable=True)
+    gain_20d = Column(Float, nullable=True)
+    pe_ratio = Column(Float, nullable=True)
+    pb_ratio = Column(Float, nullable=True)
+    llm_rank = Column(Integer, nullable=True)
+    llm_reason = Column(Text, nullable=True)
+    llm_selected = Column(Boolean, nullable=False, default=False)
+    confirmed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_scanner_task_score', 'task_id', 'quant_score'),
+        UniqueConstraint('task_id', 'code', name='uix_scanner_task_code'),
+    )
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式
