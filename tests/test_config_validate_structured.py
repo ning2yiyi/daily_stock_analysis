@@ -286,7 +286,7 @@ class TestValidateStructuredNotification:
         info = [i for i in issues if i.severity == "info"]
         assert any("搜索引擎" in i.message for i in info)
         search_issue = next(i for i in info if "搜索引擎" in i.message)
-        assert search_issue.field == "BOCHA_API_KEYS"
+        assert search_issue.field == "MX_APIKEY"
 
     def test_searxng_configured_no_search_info(self):
         """When searxng_base_urls is configured, no 'unconfigured search engine' info."""

@@ -39,6 +39,7 @@ const ScannerPage: React.FC = () => {
   } = useScannerStore();
 
   const [confirmResult, setConfirmResult] = useState<{ added: string[]; stockList: string[] } | null>(null);
+  const [market, setMarket] = useState<'us' | 'cn'>('us');
 
   // Load latest candidates on mount
   useEffect(() => {
@@ -50,8 +51,8 @@ const ScannerPage: React.FC = () => {
 
   const handleStart = useCallback(() => {
     setConfirmResult(null);
-    startScan({ market: 'us' });
-  }, [startScan]);
+    startScan({ market });
+  }, [startScan, market]);
 
   const handleConfirm = useCallback(async () => {
     const result = await confirmSelected();
@@ -59,6 +60,13 @@ const ScannerPage: React.FC = () => {
       setConfirmResult(result);
     }
   }, [confirmSelected]);
+
+  const currencySymbol = candidates.length > 0
+    ? (candidates[0].market === 'cn' ? '¥' : '$')
+    : (market === 'cn' ? '¥' : '$');
+
+  const marketLabel = market === 'cn' ? 'A股 (CN)' : '美股 (US)';
+  const marketDesc = market === 'cn' ? '沪深300 + 中证500' : 'S&P500 + Nasdaq100';
 
   const progress = status
     ? status.total > 0
@@ -70,11 +78,27 @@ const ScannerPage: React.FC = () => {
     <AppPage>
       <PageHeader
         title="选股扫描"
-        description="量化初筛 + LLM 精选，发现值得关注的美股标的"
+        description="量化初筛 + LLM 精选，发现值得关注的优质标的"
       />
 
       {/* Controls */}
       <Card className="mb-4 p-4">
+        {/* Market selector */}
+        <div className="mb-3 flex gap-2">
+          <span className="text-sm text-secondary-text self-center">市场：</span>
+          {(['us', 'cn'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={m === market ? 'btn-primary text-xs px-3 py-1' : 'btn-secondary text-xs px-3 py-1'}
+              onClick={() => setMarket(m)}
+              disabled={running}
+            >
+              {m === 'us' ? '🇺🇸 美股' : '🇨🇳 A股'}
+            </button>
+          ))}
+          <span className="text-xs text-secondary-text self-center ml-1">({marketDesc})</span>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -82,7 +106,7 @@ const ScannerPage: React.FC = () => {
             onClick={handleStart}
             disabled={running}
           >
-            {running ? '扫描中...' : '开始扫描 (美股)'}
+            {running ? '扫描中...' : `开始扫描 (${marketLabel})`}
           </button>
           {taskId && !running && candidates.length > 0 && (
             <>
@@ -224,7 +248,7 @@ const ScannerPage: React.FC = () => {
                     {pct(c.gain20d)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono">
-                    ${num(c.currentPrice)}
+                    {currencySymbol}{num(c.currentPrice)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-xs">
                     {num(c.ma5)}

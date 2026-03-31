@@ -653,6 +653,7 @@ def main() -> int:
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+                    mx_keys=config.mx_api_keys,
                 )
 
             if config.gemini_api_key or config.openai_api_key:

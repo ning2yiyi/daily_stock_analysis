@@ -50,10 +50,10 @@ def run_scan(
     request: ScannerRunRequest,
     scanner: StockScannerService = Depends(_get_scanner),
 ) -> ScannerRunResponse:
-    if request.market not in ("us",):
+    if request.market not in ("us", "cn"):
         raise HTTPException(
             status_code=400,
-            detail={"error": "invalid_market", "message": f"Market '{request.market}' not yet supported. Use 'us'."},
+            detail={"error": "invalid_market", "message": f"Market '{request.market}' not supported. Use 'us' or 'cn'."},
         )
     task_id = scanner.start_scan(
         market=request.market,

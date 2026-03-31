@@ -26,6 +26,7 @@ const fieldTitleMap: Record<string, string> = {
   STOCK_LIST: '自选股列表',
   TUSHARE_TOKEN: 'Tushare Token',
   BOCHA_API_KEYS: 'Bocha API Keys',
+  MX_APIKEY: '\u4e1c\u65b9\u8d22\u5bcc\u5999\u60f3 API Key',
   TAVILY_API_KEYS: 'Tavily API Keys',
   SERPAPI_API_KEYS: 'SerpAPI API Keys',
   BRAVE_API_KEYS: 'Brave API Keys',
@@ -81,7 +82,8 @@ const fieldTitleMap: Record<string, string> = {
 const fieldDescriptionMap: Record<string, string> = {
   STOCK_LIST: '使用逗号分隔股票代码，例如：600519,300750。',
   TUSHARE_TOKEN: '用于接入 Tushare Pro 数据服务的凭据。',
-  BOCHA_API_KEYS: '用于新闻检索的 Bocha 密钥，支持逗号分隔多个（最高优先级）。',
+  BOCHA_API_KEYS: '用于新闻检索的 Bocha 密钥，支持逗号分隔多个（次高优先级）。',
+  MX_APIKEY: '东方财富妙想金融资讯搜索密钥，支持逗号分隔多个（最高优先级）。',
   TAVILY_API_KEYS: '用于新闻检索的 Tavily 密钥，支持逗号分隔多个。',
   SERPAPI_API_KEYS: '用于新闻检索的 SerpAPI 密钥，支持逗号分隔多个。',
   BRAVE_API_KEYS: '用于新闻检索的 Brave Search 密钥，支持逗号分隔多个。',

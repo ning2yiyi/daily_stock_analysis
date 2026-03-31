@@ -100,6 +100,7 @@ class StockAnalysisPipeline:
             searxng_public_instances_enabled=self.config.searxng_public_instances_enabled,
             news_max_age_days=self.config.news_max_age_days,
             news_strategy_profile=getattr(self.config, "news_strategy_profile", "short"),
+            mx_keys=self.config.mx_api_keys,
         )
         
         logger.info(f"调度器初始化完成，最大并发数: {self.max_workers}")

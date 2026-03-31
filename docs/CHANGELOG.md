@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
+- [新功能] 🔍 **集成东方财富妙想资讯搜索** — 新增 `MiaoXiangSearchProvider`，通过 `MX_APIKEY` 接入东方财富妙想金融资讯搜索 API（`/news-search`）；妙想信源为金融权威信源，注册为最高优先级搜索提供者（排在 Bocha 之前）；`Config.mx_api_keys` 由 `MX_APIKEY`（或逗号分隔的 `MX_API_KEYS`）环境变量驱动；`.env.example`、GitHub Actions 工作流、Bot 状态命令同步更新。
+
 - [修复] 🐳 **Docker WebUI 运行时优先复用预构建静态资源** — `prepare_webui_frontend_assets()` 现在会先检查镜像内已有的 `static/index.html` 是否可直接复用；当容器运行时不包含 `apps/dsa-web` 源码目录且未安装 `npm` 时，也不会误报“未找到前端项目，无法自动构建”，从而恢复 Docker 部署后的 WebUI 打开能力。
 - [修复] 市场复盘生成链路将 LLM `max_tokens` 从 `2048` 提升到 `8192`，降低长复盘输出因 `MAX_TOKENS` 提前截断导致内容未完成的概率。
 
