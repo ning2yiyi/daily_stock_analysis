@@ -268,7 +268,7 @@ class StockScannerService:
                 current.append(code)
                 added.append(code)
         if added:
-            mgr.update({"STOCK_LIST": ",".join(current)})
+            mgr.apply_updates([("STOCK_LIST", ",".join(current))], set(), "")
             self.config.refresh_stock_list()
         return {"confirmed": count, "added": added, "stock_list": self.config.stock_list[:]}
 
@@ -616,22 +616,72 @@ class StockScannerService:
             self._fallback_select(task_id, top_codes)
             return
 
+        # Build human-readable archive text
+        analysis_text = self._format_llm_analysis(
+            task_id=task_id,
+            market=market,
+            input_count=len(cards),
+            selections=selections[:top_final],
+            raw_response=response_text,
+        )
+
         # Update database
+        from sqlalchemy import update as sa_update
         with self.repo.db.get_session() as session:
             for sel in selections[:top_final]:
                 code = sel.get("code", "")
                 rank = sel.get("rank", 0)
                 reason = sel.get("reason", "")
-                from sqlalchemy import update as sa_update
                 session.execute(
                     sa_update(ScannerCandidate)
                     .where(
                         ScannerCandidate.task_id == task_id,
                         ScannerCandidate.code == code,
                     )
-                    .values(llm_rank=rank, llm_reason=reason, llm_selected=True)
+                    .values(
+                        llm_rank=rank,
+                        llm_reason=reason,
+                        llm_selected=True,
+                        llm_analysis=analysis_text,
+                    )
                 )
             session.commit()
+
+    def _format_llm_analysis(
+        self,
+        task_id: str,
+        market: str,
+        input_count: int,
+        selections: List[Dict[str, Any]],
+        raw_response: str,
+    ) -> str:
+        """将 LLM 精选结果格式化为人类可读的存档文本。"""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        market_label = "A股" if market == "cn" else "美股"
+        lines = [
+            f"【LLM 精选分析存档】",
+            f"任务 ID : {task_id}",
+            f"时    间 : {now_str}",
+            f"市    场 : {market_label}",
+            f"输入候选 : {input_count} 只  →  精选 : {len(selections)} 只",
+            "",
+            "═" * 56,
+            "  精 选 结 果",
+            "═" * 56,
+        ]
+        for sel in selections:
+            rank = sel.get("rank", "-")
+            code = sel.get("code", "")
+            reason = sel.get("reason", "")
+            lines.append(f"  #{rank:>2}  {code:<10}  {reason}")
+        lines += [
+            "",
+            "─" * 56,
+            "  完整原始响应",
+            "─" * 56,
+            raw_response.strip(),
+        ]
+        return "\n".join(lines)
 
     def _parse_llm_selections(self, text: str) -> List[Dict[str, Any]]:
         """从 LLM 响应中解析 JSON 数组"""

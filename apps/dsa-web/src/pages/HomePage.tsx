@@ -7,6 +7,7 @@ import { StockAutocomplete } from '../components/StockAutocomplete';
 import { HistoryList } from '../components/history';
 import { ReportMarkdown, ReportSummary } from '../components/report';
 import { TaskPanel } from '../components/tasks';
+import { WatchlistPanel } from '../components/watchlist';
 import { useDashboardLifecycle, useHomeDashboardState } from '../hooks';
 import { getReportText, normalizeReportLanguage } from '../utils/reportLanguage';
 
@@ -108,6 +109,11 @@ const HomePage: React.FC = () => {
     () => (
       <div className="flex min-h-0 h-full flex-col gap-3 overflow-hidden">
         <TaskPanel tasks={activeTasks} />
+        <WatchlistPanel
+          onSelect={setQuery}
+          analyzingCode={activeTasks.find((t) => t.status === 'processing')?.stockCode}
+          activeCode={selectedReport?.meta.stockCode}
+        />
         <HistoryList
           items={historyItems}
           isLoading={isLoadingHistory}
@@ -127,6 +133,7 @@ const HomePage: React.FC = () => {
     ),
     [
       activeTasks,
+      setQuery,
       hasMore,
       historyItems,
       isDeletingHistory,
@@ -136,6 +143,7 @@ const HomePage: React.FC = () => {
       loadMoreHistory,
       selectedIds,
       selectedReport?.meta.id,
+      selectedReport?.meta.stockCode,
       toggleHistorySelection,
       toggleSelectAllVisible,
     ],

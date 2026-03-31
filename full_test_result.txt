@@ -1,0 +1,120 @@
+
+============================================================
+  1. 配置加载与验证
+============================================================
+
+--- 基础配置 ---
+  [INFO] 股票列表: ['600519', '300750', '002594']
+  [INFO] LLM 模型: openai/qwen-plus
+  [INFO] OpenAI Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+  [INFO] OpenAI Key: 已配置(sk-0c203...)
+
+--- 搜索引擎配置 ---
+  [INFO] MX_APIKEY: 已配置(mkt_QHZ2teZX...)
+  [INFO] Bocha Keys: 0 个
+  [INFO] Tavily Keys: 0 个
+  [INFO] 搜索能力启用: True
+
+--- 配置验证结果 ---
+  [INFO] 未配置 Tushare Token，将使用其他数据源
+  [WARN] 未配置通知渠道，将不发送推送通知
+  [OK] 配置模块正常
+
+============================================================
+  2. 数据源测试
+============================================================
+
+--- 已初始化数据源 ---
+  [INFO] P0 EfinanceFetcher
+  [INFO] P1 AkshareFetcher
+  [INFO] P2 TushareFetcher
+  [INFO] P2 PytdxFetcher
+  [INFO] P3 BaostockFetcher
+  [INFO] P4 YfinanceFetcher
+
+--- A股日线 (600519贵州茅台, 5日) ---
+  [OK] 来源=AkshareFetcher, 记录数=6, 耗时=9.5s
+      date   open   close   pct_chg    volume
+2026-03-26 1409.0 1401.18 -0.644557 2309289.0
+2026-03-27 1400.0 1416.02  1.059107 3008711.0
+2026-03-30 1407.0 1420.00  0.281069 2868459.0
+
+--- 美股日线 (AAPL, 3日) ---
+  [OK] 来源=YfinanceFetcher, 记录数=4, 耗时=1.1s
+      date      close  pct_chg
+2026-03-26 252.889999     0.11
+2026-03-27 248.800003    -1.62
+2026-03-30 246.630005    -0.87
+
+============================================================
+  3. 东方财富妙想搜索测试（真实 API）
+============================================================
+
+--- 测试1: 个股资讯 (贵州茅台最新研报) ---
+  [OK] 搜索成功，耗时=0.6s，返回1条
+  [1] 标题: 贵州茅台最新研报机构观点
+      摘要: ...
+
+--- 测试2: 板块/政策 (新能源政策最新动向) ---
+  [OK] 搜索成功，耗时=0.6s，返回1条
+  标题: 新能源板块近期政策动向
+  摘要: ...
+
+--- 测试3: SearchService优先级（mx_keys注册为P0） ---
+  [OK] 妙想已注册为最高优先级, providers=['东方财富妙想', 'SearXNG']
+
+--- 测试4: SearchService.search_stock_news 调用 ---
+  [OK] search_stock_news成功，来源=Filtered，耗时=8.1s
+
+============================================================
+  4. LLM 分析测试 (Qwen via DashScope)
+============================================================
+  [OK] LLM 分析器已就绪，模型: openai/qwen-plus
+
+--- 简单文本生成测试 ---
+  [OK] LLM 响应成功，耗时=2.3s
+  回答: 贵州茅台（600519.SH）是中国A股市场最具代表性的高端白酒龙头企业，以“国酒”茅台酒为核心产品，具备极强的品牌壁垒、定价权和持续稳定的高盈利能力，长期被视为核心资产与价值投资标杆。
+
+============================================================
+  5. 完整单股分析流程 (600519, dry-run模式)
+============================================================
+
+--- 搜索增强新闻获取 ---
+  [OK] 新闻搜索成功，来源=Filtered，条数=0，耗时=4.9s
+
+============================================================
+  6. 单元测试套件 (非网络)
+============================================================
+_config_validate_structured.py::TestValidateStructuredLLM::test_configured_primary_model_missing_from_channels_is_error PASSED [ 62%]
+tests/test_config_validate_structured.py::TestValidateStructuredLLM::test_configured_agent_primary_model_missing_from_channels_is_error PASSED [ 64%]
+tests/test_config_validate_structured.py::TestValidateStructuredLLM::test_configured_agent_primary_model_without_runtime_source_is_error PASSED [ 66%]
+tests/test_config_validate_structured.py::TestValidateStructuredLLM::test_configured_agent_primary_model_matching_yaml_alias_is_allowed PASSED [ 67%]
+tests/test_config_validate_structured.py::TestValidateStructuredLLM::test_configured_vision_model_missing_from_channels_is_warning PASSED [ 69%]
+tests/test_config_validate_structured.py::TestValidateStructuredNotification::test_no_notification_is_warning PASSED [ 71%]
+tests/test_config_validate_structured.py::TestValidateStructuredNotification::test_notification_configured_no_warning PASSED [ 73%]
+tests/test_config_validate_structured.py::TestValidateStructuredNotification::test_no_search_engine_is_info PASSED [ 75%]
+tests/test_config_validate_structured.py::TestValidateStructuredNotification::test_searxng_configured_no_search_info PASSED [ 76%]
+tests/test_config_validate_structured.py::TestValidateStructuredNotification::test_public_searxng_enabled_no_search_info PASSED [ 78%]
+tests/test_config_validate_structured.py::TestDeprecatedFieldHints::test_openai_vision_model_deprecation_when_env_set PASSED [ 80%]
+tests/test_config_validate_structured.py::TestDeprecatedFieldHints::test_no_deprecation_when_openai_vision_model_not_in_env PASSED [ 82%]
+tests/test_config_validate_structured.py::TestVisionKeyValidation::test_vision_model_set_no_key_is_warning PASSED [ 83%]
+tests/test_config_validate_structured.py::TestVisionKeyValidation::test_vision_model_set_with_key_no_warning PASSED [ 85%]
+tests/test_config_validate_structured.py::TestVisionKeyValidation::test_vision_model_set_with_short_key_still_warns PASSED [ 87%]
+tests/test_config_validate_structured.py::TestVisionKeyValidation::test_primary_provider_key_sufficient_even_if_not_in_priority PASSED [ 89%]
+tests/test_config_validate_structured.py::TestVisionKeyValidation::test_no_vision_model_no_warning PASSED [ 91%]
+tests/test_config_validate_structured.py::TestEnvAliasCompatibility::test_discord_channel_id_legacy_alias_is_still_loaded PASSED [ 92%]
+tests/test_config_validate_structured.py::TestEnvAliasCompatibility::test_discord_main_channel_id_takes_precedence_over_legacy_alias PASSED [ 94%]
+tests/test_config_validate_structured.py::TestValidateBackwardCompat::test_returns_list_of_str PASSED [ 96%]
+tests/test_config_validate_structured.py::TestValidateBackwardCompat::test_empty_llm_model_list_message_in_validate PASSED [ 98%]
+tests/test_config_validate_structured.py::TestValidateBackwardCompat::test_messages_match_validate_structured PASSED [100%]
+
+============================= 56 passed in 0.50s ==============================
+
+  [OK] 单元测试全部通过
+
+============================================================
+  测试汇总
+============================================================
+输出已保存至 full_test_result.txt
+如需测试通知渠道，请运行: python test_env.py --notify
+如需测试完整分析流程，请运行: python main.py --stocks 600519 --dry-run

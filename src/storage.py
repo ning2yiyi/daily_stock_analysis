@@ -647,6 +647,7 @@ class ScannerCandidate(Base):
     llm_rank = Column(Integer, nullable=True)
     llm_reason = Column(Text, nullable=True)
     llm_selected = Column(Boolean, nullable=False, default=False)
+    llm_analysis = Column(Text, nullable=True)  # task 级 LLM 分析存档（可读格式）
     confirmed = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.now)
 
@@ -707,12 +708,30 @@ class DatabaseManager:
         # 创建所有表
         Base.metadata.create_all(self._engine)
 
+        # 增量迁移：为可能不存在的新列执行 ALTER TABLE
+        self._migrate_schema()
+
         self._initialized = True
         logger.info(f"数据库初始化完成: {db_url}")
 
         # 注册退出钩子，确保程序退出时关闭数据库连接
         atexit.register(DatabaseManager._cleanup_engine, self._engine)
     
+    def _migrate_schema(self) -> None:
+        """为旧数据库补齐新增列（仅 SQLite，幂等操作）。"""
+        try:
+            from sqlalchemy import text, inspect
+            inspector = inspect(self._engine)
+            with self._engine.connect() as conn:
+                # scanner_candidates.llm_analysis
+                existing = {col["name"] for col in inspector.get_columns("scanner_candidates")}
+                if "llm_analysis" not in existing:
+                    conn.execute(text("ALTER TABLE scanner_candidates ADD COLUMN llm_analysis TEXT"))
+                    conn.commit()
+                    logger.info("DB migration: added scanner_candidates.llm_analysis")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("DB migration warning (non-fatal): %s", exc)
+
     @classmethod
     def get_instance(cls) -> 'DatabaseManager':
         """获取单例实例"""

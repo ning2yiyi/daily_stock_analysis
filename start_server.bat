@@ -40,6 +40,11 @@ if defined PID (
 
 echo [INFO] 端口 %PORT% 空闲，启动服务...
 cd /d "%~dp0"
+
+:: 后台等待服务就绪后自动打开浏览器（轮询最多 30 秒）
+start "" powershell -NoProfile -WindowStyle Hidden -Command ^
+  "$url='http://localhost:%PORT%/'; for($i=0;$i -lt 30;$i++){Start-Sleep 1; try{$r=[System.Net.WebRequest]::Create($url).GetResponse(); $r.Close(); Start-Process $url; break}catch{}}"
+
 python main.py --serve-only
 if %errorlevel% neq 0 (
     echo [ERROR] 服务异常退出，退出码: %errorlevel%
