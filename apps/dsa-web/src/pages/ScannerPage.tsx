@@ -22,12 +22,12 @@ function num(v?: number | null, d = 2): string {
 
 const ScannerPage: React.FC = () => {
   const {
-    taskId,
+    market,
+    setMarket,
+    marketData,
     status,
     running,
     confirming,
-    candidates,
-    selectedCodes,
     error,
     startScan,
     loadCandidates,
@@ -37,6 +37,9 @@ const ScannerPage: React.FC = () => {
     confirmSelected,
     reset,
   } = useScannerStore();
+
+  // Derive per-market data for the currently viewed market
+  const { taskId, candidates, selectedCodes } = marketData[market];
 
   const [confirmResult, setConfirmResult] = useState<{ added: string[]; stockList: string[] } | null>(null);
 
@@ -48,9 +51,14 @@ const ScannerPage: React.FC = () => {
     };
   }, [loadCandidates]);
 
+  const handleMarketSwitch = useCallback((m: 'us' | 'cn') => {
+    setMarket(m);
+    setConfirmResult(null);
+  }, [setMarket]);
+
   const handleStart = useCallback(() => {
     setConfirmResult(null);
-    startScan({ market: 'us' });
+    startScan();
   }, [startScan]);
 
   const handleConfirm = useCallback(async () => {
@@ -59,6 +67,13 @@ const ScannerPage: React.FC = () => {
       setConfirmResult(result);
     }
   }, [confirmSelected]);
+
+  const currencySymbol = candidates.length > 0
+    ? (candidates[0].market === 'cn' ? '¥' : '$')
+    : (market === 'cn' ? '¥' : '$');
+
+  const marketLabel = market === 'cn' ? 'A股 (CN)' : '美股 (US)';
+  const marketDesc = market === 'cn' ? '沪深300 + 中证500' : 'S&P500 + Nasdaq100';
 
   const progress = status
     ? status.total > 0
@@ -70,11 +85,27 @@ const ScannerPage: React.FC = () => {
     <AppPage>
       <PageHeader
         title="选股扫描"
-        description="量化初筛 + LLM 精选，发现值得关注的美股标的"
+        description="量化初筛 + LLM 精选，发现值得关注的优质标的"
       />
 
       {/* Controls */}
       <Card className="mb-4 p-4">
+        {/* Market selector */}
+        <div className="mb-3 flex gap-2">
+          <span className="text-sm text-secondary-text self-center">市场：</span>
+          {(['us', 'cn'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={m === market ? 'btn-primary text-xs px-3 py-1' : 'btn-secondary text-xs px-3 py-1'}
+              onClick={() => handleMarketSwitch(m)}
+              disabled={running}
+            >
+              {m === 'us' ? '🇺🇸 美股' : '🇨🇳 A股'}
+            </button>
+          ))}
+          <span className="text-xs text-secondary-text self-center ml-1">({marketDesc})</span>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -82,7 +113,7 @@ const ScannerPage: React.FC = () => {
             onClick={handleStart}
             disabled={running}
           >
-            {running ? '扫描中...' : '开始扫描 (美股)'}
+            {running ? '扫描中...' : `开始扫描 (${marketLabel})`}
           </button>
           {taskId && !running && candidates.length > 0 && (
             <>
@@ -224,7 +255,7 @@ const ScannerPage: React.FC = () => {
                     {pct(c.gain20d)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono">
-                    ${num(c.currentPrice)}
+                    {currencySymbol}{num(c.currentPrice)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-xs">
                     {num(c.ma5)}
@@ -264,7 +295,7 @@ const ScannerPage: React.FC = () => {
       {!running && candidates.length === 0 && !error && (
         <Card className="py-16 text-center">
           <p className="text-secondary-text">
-            点击「开始扫描」，从标普500 + 纳斯达克100中筛选值得关注的标的
+            当前{market === 'us' ? '美股' : 'A股'}筛选列表为空，点击「开始扫描」从{market === 'us' ? '标普500 + 纳斯达克100' : '沪深300 + 中证500'}中筛选标的
           </p>
           <p className="mt-2 text-xs text-muted-text">
             量化初筛（MA多头/乖离率/量比/涨幅）→ LLM精选 Top 10 → 确认加入自选

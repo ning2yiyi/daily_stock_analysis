@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class ScannerRunRequest(BaseModel):
-    market: str = Field("us", description="market to scan: us")
+    market: str = Field("us", description="market to scan: us / cn")
     bias_threshold: Optional[float] = Field(None, ge=1.0, le=20.0, description="乖离率上限(%)")
     gain_min: Optional[float] = Field(None, ge=0.0, description="近20日涨幅下限(%)")
     gain_max: Optional[float] = Field(None, ge=5.0, description="近20日涨幅上限(%)")

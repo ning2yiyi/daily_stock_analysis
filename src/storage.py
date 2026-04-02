@@ -620,6 +620,51 @@ class LLMUsage(Base):
     called_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class BacktestRecord(Base):
+    """选股/分析回测验证记录"""
+
+    __tablename__ = 'backtest_records'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String(10), nullable=False, index=True)        # 交易日 YYYY-MM-DD
+    code = Column(String(16), nullable=False)
+    name = Column(String(64), nullable=True)
+    market = Column(String(8), nullable=False, default='cn')
+
+    # 盘前预测
+    scan_task_id = Column(String(64), nullable=True)             # 关联 scanner 任务
+    query_id = Column(String(64), nullable=True)                 # 关联 analysis 记录
+    quant_score = Column(Float, nullable=True)
+    llm_rank = Column(Integer, nullable=True)
+    operation_advice = Column(String(20), nullable=True)         # 买入/观望/卖出
+    sentiment_score = Column(Integer, nullable=True)             # 0-100
+    predicted_direction = Column(String(8), nullable=True)       # up/down/neutral
+    ideal_buy = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+
+    # 盘前快照
+    open_price = Column(Float, nullable=True)                    # 当日开盘价
+    pre_close = Column(Float, nullable=True)                     # 前收盘价
+
+    # 收盘后实际
+    close_price = Column(Float, nullable=True)
+    change_pct = Column(Float, nullable=True)                    # 涨跌幅 %
+    actual_direction = Column(String(8), nullable=True)          # up/down/flat
+
+    # 验证结果
+    scan_hit = Column(Boolean, nullable=True)                    # 选股命中（收涨）
+    direction_hit = Column(Boolean, nullable=True)               # 方向命中
+    validated = Column(Boolean, nullable=False, default=False)   # 是否已验证
+    validated_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_backtest_date_code', 'date', 'code'),
+        UniqueConstraint('date', 'code', name='uix_backtest_date_code'),
+    )
+
+
 class ScannerCandidate(Base):
     """选股扫描候选结果"""
 
@@ -647,6 +692,7 @@ class ScannerCandidate(Base):
     llm_rank = Column(Integer, nullable=True)
     llm_reason = Column(Text, nullable=True)
     llm_selected = Column(Boolean, nullable=False, default=False)
+    llm_analysis = Column(Text, nullable=True)  # task 级 LLM 分析存档（可读格式）
     confirmed = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.now)
 
@@ -707,12 +753,30 @@ class DatabaseManager:
         # 创建所有表
         Base.metadata.create_all(self._engine)
 
+        # 增量迁移：为可能不存在的新列执行 ALTER TABLE
+        self._migrate_schema()
+
         self._initialized = True
         logger.info(f"数据库初始化完成: {db_url}")
 
         # 注册退出钩子，确保程序退出时关闭数据库连接
         atexit.register(DatabaseManager._cleanup_engine, self._engine)
     
+    def _migrate_schema(self) -> None:
+        """为旧数据库补齐新增列（仅 SQLite，幂等操作）。"""
+        try:
+            from sqlalchemy import text, inspect
+            inspector = inspect(self._engine)
+            with self._engine.connect() as conn:
+                # scanner_candidates.llm_analysis
+                existing = {col["name"] for col in inspector.get_columns("scanner_candidates")}
+                if "llm_analysis" not in existing:
+                    conn.execute(text("ALTER TABLE scanner_candidates ADD COLUMN llm_analysis TEXT"))
+                    conn.commit()
+                    logger.info("DB migration: added scanner_candidates.llm_analysis")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("DB migration warning (non-fatal): %s", exc)
+
     @classmethod
     def get_instance(cls) -> 'DatabaseManager':
         """获取单例实例"""

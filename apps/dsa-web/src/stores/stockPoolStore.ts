@@ -13,6 +13,7 @@ type SelectionSource = 'manual' | 'autocomplete' | 'import' | 'image';
 
 type FetchHistoryOptions = {
   autoSelectFirst?: boolean;
+  autoSelectLatest?: boolean;
   reset?: boolean;
   silent?: boolean;
 };
@@ -56,6 +57,7 @@ export interface StockPoolState {
   closeMarkdownDrawer: () => void;
   loadInitialHistory: () => Promise<void>;
   refreshHistory: (silent?: boolean) => Promise<void>;
+  refreshHistoryAndSelectLatest: () => Promise<void>;
   loadMoreHistory: () => Promise<void>;
   selectHistoryItem: (recordId: number) => Promise<void>;
   toggleHistorySelection: (recordId: number) => void;
@@ -105,7 +107,7 @@ async function fetchHistory(
   set: (partial: Partial<StockPoolState>) => void,
   options: FetchHistoryOptions = {},
 ): Promise<HistoryListResponse | null> {
-  const { autoSelectFirst = false, reset = true, silent = false } = options;
+  const { autoSelectFirst = false, autoSelectLatest = false, reset = true, silent = false } = options;
   const currentState = get();
   const page = reset ? 1 : currentState.currentPage + 1;
   const requestId = ++historyRequestSeq;
@@ -156,6 +158,10 @@ async function fetchHistory(
       await get().selectHistoryItem(response.items[0].id);
     }
 
+    if (autoSelectLatest && get().historyItems.length > 0) {
+      await get().selectHistoryItem(get().historyItems[0].id);
+    }
+
     return response;
   } catch (error) {
     if (requestId !== historyRequestSeq) {
@@ -201,6 +207,10 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
 
   refreshHistory: async (silent = false) => {
     await fetchHistory(get, set, { reset: true, silent });
+  },
+
+  refreshHistoryAndSelectLatest: async () => {
+    await fetchHistory(get, set, { reset: true, silent: true, autoSelectLatest: true });
   },
 
   loadMoreHistory: async () => {

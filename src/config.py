@@ -48,7 +48,9 @@ class ConfigIssue:
 
 
 _MANAGED_LITELLM_KEY_PROVIDERS = {"gemini", "vertex_ai", "anthropic", "openai", "deepseek"}
-SUPPORTED_LLM_CHANNEL_PROTOCOLS = ("openai", "anthropic", "gemini", "vertex_ai", "deepseek", "ollama")
+SUPPORTED_LLM_CHANNEL_PROTOCOLS = ("openai", "anthropic", "gemini", "vertex_ai", "deepseek", "ollama", "llamacpp")
+# Protocols that use OpenAI-compatible API internally (for LiteLLM routing)
+_OPENAI_COMPAT_PROTOCOLS = {"llamacpp"}
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off"}
 NEWS_STRATEGY_WINDOWS: Dict[str, int] = {
     "ultra_short": 1,
@@ -181,6 +183,9 @@ def canonicalize_llm_channel_protocol(value: Optional[str]) -> str:
         "google": "gemini",
         "vertex": "vertex_ai",
         "vertexai": "vertex_ai",
+        "llama_cpp": "llamacpp",
+        "llama.cpp": "llamacpp",
+        "llama": "llamacpp",
     }
     return aliases.get(candidate, candidate)
 
@@ -224,10 +229,21 @@ def resolve_llm_channel_protocol(
 def channel_allows_empty_api_key(protocol: Optional[str], base_url: Optional[str]) -> bool:
     """Return True when a channel can run without an API key."""
     resolved_protocol = resolve_llm_channel_protocol(protocol, base_url=base_url)
-    if resolved_protocol == "ollama":
+    if resolved_protocol in ("ollama", "llamacpp"):
         return True
     parsed = urlparse(base_url or "")
     return parsed.hostname in {"127.0.0.1", "localhost", "0.0.0.0"}
+
+
+def _resolve_litellm_protocol(protocol: str) -> str:
+    """Map channel protocol to LiteLLM provider prefix.
+
+    Some protocols (e.g. llamacpp) are OpenAI-compatible at the wire level
+    and need ``openai/`` prefix for LiteLLM routing.
+    """
+    if protocol in _OPENAI_COMPAT_PROTOCOLS:
+        return "openai"
+    return protocol
 
 
 def normalize_llm_channel_model(model: str, protocol: Optional[str], base_url: Optional[str] = None) -> str:
@@ -252,17 +268,24 @@ def normalize_llm_channel_model(model: str, protocol: Optional[str], base_url: O
             "command-r", "groq", "cerebras", "fireworks_ai", "friendliai",
         }
         if prefix in known_providers:
+            # Rewrite protocols that LiteLLM doesn't recognise natively
+            litellm_prefix = _resolve_litellm_protocol(prefix)
+            if litellm_prefix != prefix:
+                return f"{litellm_prefix}/{remainder}"
             return normalized_model
         if canonical_prefix in known_providers:
-            return f"{canonical_prefix}/{remainder}"
+            litellm_prefix = _resolve_litellm_protocol(canonical_prefix)
+            return f"{litellm_prefix}/{remainder}"
         # Not a real provider prefix — add one so LiteLLM routes correctly.
         if resolved_protocol:
-            return f"{resolved_protocol}/{normalized_model}"
+            litellm_provider = _resolve_litellm_protocol(resolved_protocol)
+            return f"{litellm_provider}/{normalized_model}"
         return normalized_model
 
     if not resolved_protocol:
         return normalized_model
-    return f"{resolved_protocol}/{normalized_model}"
+    litellm_provider = _resolve_litellm_protocol(resolved_protocol)
+    return f"{litellm_provider}/{normalized_model}"
 
 
 def get_configured_llm_models(model_list: List[Dict[str, Any]]) -> List[str]:
@@ -493,6 +516,7 @@ class Config:
     vision_provider_priority: str = "gemini,anthropic,openai"
 
     # === 搜索引擎配置（支持多 Key 负载均衡）===
+    mx_api_keys: List[str] = field(default_factory=list)  # 东方财富妙想 API Keys
     bocha_api_keys: List[str] = field(default_factory=list)  # Bocha API Keys
     minimax_api_keys: List[str] = field(default_factory=list)  # MiniMax API Keys
     tavily_api_keys: List[str] = field(default_factory=list)  # Tavily API Keys
@@ -1003,6 +1027,9 @@ class Config:
         )
 
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
+        mx_keys_str = os.getenv('MX_APIKEY', '') or os.getenv('MX_API_KEYS', '')
+        mx_api_keys = [k.strip() for k in mx_keys_str.split(',') if k.strip()]
+
         bocha_keys_str = os.getenv('BOCHA_API_KEYS', '')
         bocha_api_keys = [k.strip() for k in bocha_keys_str.split(',') if k.strip()]
 
@@ -1121,6 +1148,7 @@ class Config:
                 or ""
             ),
             vision_provider_priority=os.getenv('VISION_PROVIDER_PRIORITY', 'gemini,anthropic,openai'),
+            mx_api_keys=mx_api_keys,
             bocha_api_keys=bocha_api_keys,
             minimax_api_keys=minimax_api_keys,
             tavily_api_keys=tavily_api_keys,
@@ -1781,15 +1809,29 @@ class Config:
         return bool(self.searxng_base_urls) or bool(self.searxng_public_instances_enabled)
 
     def has_search_capability_enabled(self) -> bool:
-        """Whether any search provider is configured or SearXNG fallback is enabled."""
+        """Whether any search provider is configured or SearXNG/DuckDuckGo fallback is enabled."""
+        return self._has_explicit_search_capability() or self._has_duckduckgo_fallback()
+
+    def _has_explicit_search_capability(self) -> bool:
+        """Whether an explicitly configured (key-based or SearXNG) search provider is available."""
         return bool(
-            self.bocha_api_keys
+            self.mx_api_keys
+            or self.bocha_api_keys
             or self.minimax_api_keys
             or self.tavily_api_keys
             or self.brave_api_keys
             or self.serpapi_keys
             or self.has_searxng_enabled()
         )
+
+    @staticmethod
+    def _has_duckduckgo_fallback() -> bool:
+        """Whether duckduckgo_search library is installed as zero-config fallback."""
+        try:
+            from duckduckgo_search import DDGS  # noqa: F401
+            return True
+        except ImportError:
+            return False
 
     def is_agent_available(self) -> bool:
         """Check whether agent capabilities are usable.
@@ -1997,12 +2039,19 @@ class Config:
             ))
 
         # --- Search engine (informational only) ---
-        if not self.has_search_capability_enabled():
-            issues.append(ConfigIssue(
-                severity="info",
-                message="未配置搜索引擎能力 (Bocha/MiniMax/Tavily/Brave/SerpAPI/SearXNG)，新闻搜索功能将不可用",
-                field="BOCHA_API_KEYS",
-            ))
+        if not self._has_explicit_search_capability():
+            if self._has_duckduckgo_fallback():
+                issues.append(ConfigIssue(
+                    severity="info",
+                    message="未配置搜索引擎 API Key，将使用 DuckDuckGo 免费兜底；配置 MX/Bocha/Tavily 等可获得更优搜索效果",
+                    field="MX_APIKEY",
+                ))
+            else:
+                issues.append(ConfigIssue(
+                    severity="info",
+                    message="未配置搜索引擎能力 (妙想MX/Bocha/MiniMax/Tavily/Brave/SerpAPI/SearXNG)，新闻搜索功能将不可用；安装 duckduckgo_search 库可零配置启用免费搜索",
+                    field="MX_APIKEY",
+                ))
 
         # --- Notification channels ---
         has_notification = bool(

@@ -93,6 +93,7 @@ class MarketCommand(BotCommand):
                     searxng_base_urls=config.searxng_base_urls,
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
                     news_max_age_days=config.news_max_age_days,
+                    mx_keys=config.mx_api_keys,
                 )
 
             # 初始化 AI 分析器

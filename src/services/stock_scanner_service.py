@@ -21,6 +21,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -82,23 +83,77 @@ class ScanTask:
 # Universe providers
 # ---------------------------------------------------------------------------
 
+# Cache directory for offline fallback
+_CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_US_CACHE_FILE = _CACHE_DIR / "us_universe_cache.json"
+_US_CACHE_MAX_AGE_DAYS = 7
+
+
+def _load_us_cache() -> List[Tuple[str, str]]:
+    """Load US universe from local cache if fresh enough."""
+    try:
+        if not _US_CACHE_FILE.exists():
+            return []
+        data = json.loads(_US_CACHE_FILE.read_text(encoding="utf-8"))
+        cached_at = datetime.fromisoformat(data.get("cached_at", "2000-01-01"))
+        if datetime.now() - cached_at > timedelta(days=_US_CACHE_MAX_AGE_DAYS):
+            logger.info("US universe cache expired (cached_at=%s)", cached_at.date())
+            return []
+        tickers = [(t["ticker"], t["name"]) for t in data.get("tickers", [])]
+        logger.info("US universe loaded from cache (%d tickers, cached_at=%s)", len(tickers), cached_at.date())
+        return tickers
+    except Exception as exc:
+        logger.warning("Failed to read US universe cache: %s", exc)
+        return []
+
+
+def _save_us_cache(tickers: List[Tuple[str, str]]) -> None:
+    """Persist US universe to local cache."""
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        data = {
+            "cached_at": datetime.now().isoformat(),
+            "count": len(tickers),
+            "tickers": [{"ticker": t, "name": n} for t, n in tickers],
+        }
+        _US_CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("US universe cache saved (%d tickers)", len(tickers))
+    except Exception as exc:
+        logger.warning("Failed to save US universe cache: %s", exc)
+
+
+def _read_html_with_timeout(url: str, attrs: dict, timeout: int = 10) -> pd.DataFrame:
+    """Fetch HTML table via requests (proxy-aware, with timeout) then parse with pd.read_html."""
+    import io
+    import requests
+
+    resp = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (DSA StockScanner)"},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    dfs = pd.read_html(io.StringIO(resp.text), attrs=attrs)
+    return dfs[0]
+
+
 def fetch_us_universe() -> List[Tuple[str, str]]:
     """
     从网络动态获取标普500 + 纳斯达克100成分股列表。
+    网络失败时回退到本地缓存；成功获取后自动更新缓存。
 
     Returns:
         [(ticker, name), ...] 去重后约 550 只
     """
-    seen = set()
+    seen: set[str] = set()
     result: List[Tuple[str, str]] = []
 
-    # S&P 500 via yfinance/wikipedia
+    # S&P 500 via Wikipedia
     try:
-        import yfinance as yf
-        sp500 = pd.read_html(
+        sp500 = _read_html_with_timeout(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
             attrs={"id": "constituents"},
-        )[0]
+        )
         for _, row in sp500.iterrows():
             ticker = str(row.get("Symbol", "")).strip().replace(".", "-")
             name = str(row.get("Security", ticker)).strip()
@@ -111,10 +166,10 @@ def fetch_us_universe() -> List[Tuple[str, str]]:
 
     # Nasdaq-100
     try:
-        ndx = pd.read_html(
+        ndx = _read_html_with_timeout(
             "https://en.wikipedia.org/wiki/Nasdaq-100",
             attrs={"id": "constituents"},
-        )[0]
+        )
         added = 0
         for _, row in ndx.iterrows():
             ticker = str(row.get("Ticker", "")).strip().replace(".", "-")
@@ -127,8 +182,58 @@ def fetch_us_universe() -> List[Tuple[str, str]]:
     except Exception as exc:
         logger.warning("Failed to fetch Nasdaq-100 list: %s", exc)
 
+    # Success: save cache
+    if result:
+        _save_us_cache(result)
+        return result
+
+    # Fallback: local cache
+    cached = _load_us_cache()
+    if cached:
+        logger.warning("Network fetch failed, using cached US universe (%d tickers)", len(cached))
+        return cached
+
+    raise RuntimeError("Failed to fetch any US stock universe; check network or enable proxy (USE_PROXY=true)")
+
+
+def fetch_cn_universe() -> List[Tuple[str, str]]:
+    """
+    获取A股股票池：沪深300 + 中证500（共约800只）。
+
+    Returns:
+        [(code, name), ...] 去重后约800只
+    """
+    try:
+        import akshare as ak
+    except ImportError:
+        raise RuntimeError("akshare 未安装，请运行: pip install akshare")
+
+    seen: set = set()
+    result: List[Tuple[str, str]] = []
+
+    for index_code, index_name in [("000300", "沪深300"), ("000905", "中证500")]:
+        try:
+            df = ak.index_stock_cons(symbol=index_code)
+            # akshare 返回列名通常为 "品种代码" 和 "品种名称"
+            if "品种代码" in df.columns and "品种名称" in df.columns:
+                code_col, name_col = "品种代码", "品种名称"
+            else:
+                code_col = df.columns[0]
+                name_col = df.columns[1] if len(df.columns) > 1 else code_col
+            added = 0
+            for _, row in df.iterrows():
+                code = str(row[code_col]).strip()
+                name = str(row[name_col]).strip() if name_col != code_col else code
+                if code and code not in seen:
+                    seen.add(code)
+                    result.append((code, name))
+                    added += 1
+            logger.info("%s: added %d tickers (total=%d)", index_name, added, len(result))
+        except Exception as exc:
+            logger.warning("Failed to fetch %s (%s) universe: %s", index_name, index_code, exc)
+
     if not result:
-        raise RuntimeError("Failed to fetch any US stock universe; check network")
+        raise RuntimeError("A股股票池获取失败，请检查网络或 akshare 安装")
 
     return result
 
@@ -151,6 +256,8 @@ class StockScannerService:
         self.config = config or get_config()
         self.repo = ScannerRepository(db_manager)
         self.fetcher_manager = DataFetcherManager()
+        # A股专用轻量 fetcher：仅新浪接口，最小限速（扫描场景无需防封印）
+        self._cn_fetcher = None  # lazy init
 
     # ----- task management -----
 
@@ -222,7 +329,7 @@ class StockScannerService:
                 current.append(code)
                 added.append(code)
         if added:
-            mgr.update({"STOCK_LIST": ",".join(current)})
+            mgr.apply_updates([("STOCK_LIST", ",".join(current))], set(), "")
             self.config.refresh_stock_list()
         return {"confirmed": count, "added": added, "stock_list": self.config.stock_list[:]}
 
@@ -240,6 +347,8 @@ class StockScannerService:
 
             if market == "us":
                 universe = fetch_us_universe()
+            elif market == "cn":
+                universe = fetch_cn_universe()
             else:
                 raise ValueError(f"Market '{market}' not yet supported")
 
@@ -253,11 +362,14 @@ class StockScannerService:
             history_days = self.config.scan_history_days
             all_cards: List[QuantScoreCard] = []
 
+            # A股使用直连新浪接口，跳过 DataFetcherManager 多级重试，大幅提速
+            score_fn = self._score_one_cn if market == "cn" else self._score_one
+
             for i in range(0, len(universe), batch_size):
                 batch = universe[i : i + batch_size]
                 for ticker, name in batch:
                     try:
-                        card = self._score_one(ticker, name, market, history_days, params)
+                        card = score_fn(ticker, name, market, history_days, params)
                         if card and card.total_score >= params["score_threshold"]:
                             all_cards.append(card)
                     except Exception as exc:
@@ -287,7 +399,7 @@ class StockScannerService:
             self._set_task(task)
 
             try:
-                self._llm_refine(task_id, top_cards, params["top_final"])
+                self._llm_refine(task_id, top_cards, params["top_final"], market=market)
             except Exception as exc:
                 logger.warning("LLM refinement failed, using quant-only results: %s", exc)
                 # Fallback: mark top N by quant score as selected
@@ -313,19 +425,76 @@ class StockScannerService:
         history_days: int,
         params: Dict[str, Any],
     ) -> Optional[QuantScoreCard]:
-        """计算单只股票的量化得分"""
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=history_days + 30)).strftime("%Y%m%d")
+        """计算单只股票的量化得分（通用路径，经 DataFetcherManager）"""
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=history_days + 30)).strftime("%Y-%m-%d")
 
-        df = self.fetcher_manager.get_stock_data(code, start_date, end_date)
+        result = self.fetcher_manager.get_daily_data(code, start_date, end_date)
+        df = result[0] if isinstance(result, tuple) else result
         if df is None or len(df) < 25:
             return None
 
         df = df.sort_values("date").reset_index(drop=True)
         close = df["close"].astype(float)
         volume = df["volume"].astype(float)
+        return self._compute_score_card(code, name, market, close, volume, params)
 
-        # MA
+    def _score_one_cn(
+        self,
+        code: str,
+        name: str,
+        market: str,
+        history_days: int,
+        params: Dict[str, Any],
+    ) -> Optional[QuantScoreCard]:
+        """
+        A股专用快速评分路径：直接调用 AkshareFetcher 新浪接口，
+        跳过 DataFetcherManager 的多级重试，并使用极低延迟配置。
+        东方财富接口在批量扫描时极易被限制，新浪接口更稳定。
+        """
+        from data_provider.akshare_fetcher import AkshareFetcher
+
+        # lazy init：scanner 专用低延迟 fetcher（sleep 0.2-0.5s）
+        if self._cn_fetcher is None:
+            self._cn_fetcher = AkshareFetcher(sleep_min=0.2, sleep_max=0.5)
+
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=history_days + 30)).strftime("%Y-%m-%d")
+
+        try:
+            df = self._cn_fetcher._fetch_stock_data_sina(code, start_date, end_date)
+        except Exception as exc:
+            logger.debug("[CN scan] %s sina failed: %s", code, exc)
+            return None
+
+        if df is None or df.empty or len(df) < 25:
+            return None
+
+        # 列名标准化（中文 → 英文）
+        col_map = {
+            "日期": "date", "开盘": "open", "收盘": "close",
+            "最高": "high", "最低": "low", "成交量": "volume",
+        }
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+        if "close" not in df.columns or "volume" not in df.columns:
+            return None
+
+        df = df.sort_values("date").reset_index(drop=True)
+        close = df["close"].astype(float)
+        volume = df["volume"].astype(float)
+        return self._compute_score_card(code, name, market, close, volume, params)
+
+    def _compute_score_card(
+        self,
+        code: str,
+        name: str,
+        market: str,
+        close: "pd.Series",
+        volume: "pd.Series",
+        params: Dict[str, Any],
+    ) -> Optional[QuantScoreCard]:
+        """从 close/volume Series 计算 QuantScoreCard（通用）"""
         ma5 = close.rolling(5).mean()
         ma10 = close.rolling(10).mean()
         ma20 = close.rolling(20).mean()
@@ -338,28 +507,27 @@ class StockScannerService:
         if any(math.isnan(v) for v in [latest_ma5, latest_ma10, latest_ma20]):
             return None
 
-        # --- MA score (30) ---
         ma_score = 0.0
         if latest_ma5 > latest_ma10 > latest_ma20:
             ma_score = 30.0
         elif latest_ma5 > latest_ma10:
             ma_score = 15.0
 
-        # --- Bias score (25) ---
         bias_ma5 = (latest - latest_ma5) / latest_ma5 * 100 if latest_ma5 else 0
         bias_threshold = params["bias_threshold"]
-        if abs(bias_ma5) < 2:
-            bias_score = 25.0
-        elif abs(bias_ma5) < bias_threshold:
-            bias_score = 15.0
+        abs_bias = abs(bias_ma5)
+        if abs_bias < 2:
+            bias_score = 25.0   # 最佳买点区间
+        elif abs_bias < 3:
+            bias_score = 15.0   # 可正常介入
+        elif abs_bias < bias_threshold:
+            bias_score = 5.0    # 仅可小仓介入，与分析模块对齐
         else:
-            bias_score = 0.0
+            bias_score = 0.0    # 严禁追高
 
-        # --- Volume score (25) ---
         vol_5 = volume.iloc[-5:].mean()
         vol_20 = volume.iloc[-20:].mean()
         volume_ratio = vol_5 / vol_20 if vol_20 > 0 else 0
-
         if volume_ratio > 1.5:
             volume_score = 25.0
         elif volume_ratio > params["volume_ratio_min"]:
@@ -367,7 +535,6 @@ class StockScannerService:
         else:
             volume_score = 0.0
 
-        # --- Gain score (20) ---
         if len(close) >= 20:
             price_20d_ago = close.iloc[-20]
             gain_20d = (latest - price_20d_ago) / price_20d_ago * 100 if price_20d_ago > 0 else 0
@@ -384,25 +551,15 @@ class StockScannerService:
             gain_score = 0.0
 
         total = ma_score + bias_score + volume_score + gain_score
-
-        card = QuantScoreCard(
-            code=code,
-            name=name,
-            market=market,
-            ma_score=ma_score,
-            bias_score=bias_score,
-            volume_score=volume_score,
-            gain_score=gain_score,
+        return QuantScoreCard(
+            code=code, name=name, market=market,
+            ma_score=ma_score, bias_score=bias_score,
+            volume_score=volume_score, gain_score=gain_score,
             total_score=total,
             current_price=round(latest, 2),
-            ma5=round(latest_ma5, 2),
-            ma10=round(latest_ma10, 2),
-            ma20=round(latest_ma20, 2),
-            bias_ma5=round(bias_ma5, 2),
-            volume_ratio=round(volume_ratio, 2),
-            gain_20d=round(gain_20d, 2),
+            ma5=round(latest_ma5, 2), ma10=round(latest_ma10, 2), ma20=round(latest_ma20, 2),
+            bias_ma5=round(bias_ma5, 2), volume_ratio=round(volume_ratio, 2), gain_20d=round(gain_20d, 2),
         )
-        return card
 
     def _card_to_model(self, task_id: str, card: QuantScoreCard) -> ScannerCandidate:
         return ScannerCandidate(
@@ -429,13 +586,15 @@ class StockScannerService:
     # ----- LLM refinement -----
 
     def _llm_refine(
-        self, task_id: str, cards: List[QuantScoreCard], top_final: int
+        self, task_id: str, cards: List[QuantScoreCard], top_final: int, market: str = "us"
     ) -> None:
         """
         调用 LLM 对量化初筛结果进行精选排序。
         """
         from src.analyzer import GeminiAnalyzer
-        from data_provider.fundamental_adapter import AkshareFundamentalAdapter
+
+        currency = "¥" if market == "cn" else "$"
+        is_cn = market == "cn"
 
         # Build summary for LLM
         stock_summaries = []
@@ -443,48 +602,76 @@ class StockScannerService:
             summary = (
                 f"{i}. {card.code} ({card.name}) | "
                 f"评分 {card.total_score:.0f} | "
-                f"价格 ${card.current_price} | "
+                f"价格 {currency}{card.current_price} | "
                 f"MA5={card.ma5} MA10={card.ma10} MA20={card.ma20} | "
                 f"乖离率 {card.bias_ma5:.1f}% | "
                 f"量比 {card.volume_ratio:.1f} | "
                 f"20日涨幅 {card.gain_20d:.1f}%"
             )
-            # Try fetching PE/PB
-            try:
-                import yfinance as yf
-                info = yf.Ticker(card.code).info
-                pe = info.get("trailingPE")
-                pb = info.get("priceToBook")
-                mcap = info.get("marketCap")
-                if pe:
-                    summary += f" | PE={pe:.1f}"
-                    card.pe_ratio = round(pe, 2)
-                if pb:
-                    summary += f" | PB={pb:.1f}"
-                    card.pb_ratio = round(pb, 2)
-                if mcap:
-                    summary += f" | 市值=${mcap / 1e9:.1f}B"
-            except Exception:
-                pass
+            if not is_cn:
+                # Try fetching PE/PB via yfinance for US stocks
+                try:
+                    import yfinance as yf
+                    info = yf.Ticker(card.code).info
+                    pe = info.get("trailingPE")
+                    pb = info.get("priceToBook")
+                    mcap = info.get("marketCap")
+                    if pe:
+                        summary += f" | PE={pe:.1f}"
+                        card.pe_ratio = round(pe, 2)
+                    if pb:
+                        summary += f" | PB={pb:.1f}"
+                        card.pb_ratio = round(pb, 2)
+                    if mcap:
+                        summary += f" | 市值={currency}{mcap / 1e9:.1f}B"
+                except Exception:
+                    pass
             stock_summaries.append(summary)
 
-        prompt = f"""你是一位专业的美股投资分析师。以下是通过量化初筛选出的 {len(cards)} 只候选股票：
+        bias_rules = """   - 乖离率 < 2%：最佳买点区间，优先选入
+   - 乖离率 2-3%：可正常介入
+   - 乖离率 3-5%：仅可小仓追踪，应降低排名
+   - 乖离率 > 5%：严禁追高，必须排除！"""
+        entry_rules = """   - 最佳买入信号：缩量回踩 MA5 获得支撑后企稳
+   - 次优买入信号：回踩 MA10 获得支撑
+   - 观望信号：跌破 MA20"""
+
+        if is_cn:
+            analyst_role = "A股投资分析师"
+            market_desc = "A股"
+            criteria = f"""1. 趋势健康度：多头排列（MA5>MA10>MA20）稳固，不是已进入加速赶顶阶段
+2. 位置合理性（严格执行不追高原则）：
+{bias_rules}
+3. 买点质量（优先选择有回踩支撑信号的标的）：
+{entry_rules}
+4. 量价配合度：放量上涨/缩量回调优于缩量上涨，成交量能验证走势
+5. 资金面与板块：关注主力资金流入、所处板块热度
+6. 涨幅空间：近期涨幅不宜过大（20日涨幅超30%需警惕），有持续上涨的动力"""
+        else:
+            analyst_role = "美股投资分析师"
+            market_desc = "美股"
+            criteria = f"""1. 趋势健康度：多头排列（MA5>MA10>MA20）稳固，不是已进入加速赶顶阶段
+2. 位置合理性（严格执行不追高原则）：
+{bias_rules}
+3. 买点质量（优先选择有回踩支撑信号的标的）：
+{entry_rules}
+4. 量价配合度：放量上涨/缩量回调优于缩量上涨
+5. 基本面支撑：PE/PB合理，非纯炒作标的
+6. 涨幅空间：近期涨幅不宜过大（20日涨幅超30%需警惕），避免高位接盘"""
+
+        prompt = f"""你是一位专业的{analyst_role}。以下是通过量化初筛选出的 {len(cards)} 只{market_desc}候选股票：
 
 {chr(10).join(stock_summaries)}
 
 请从中精选出最值得关注的 {top_final} 只，按推荐优先级排序。
 
 评估标准：
-1. 趋势健康度：多头排列稳固，不是已进入加速赶顶阶段
-2. 位置合理性：不追高，距离均线位置合理
-3. 量价配合度：放量上涨/缩量回调优于缩量上涨
-4. 基本面支撑：PE/PB合理，非纯炒作标的
-5. 涨幅空间：近期涨幅不宜过大，避免高位接盘
+{criteria}
 
 请严格按以下 JSON 格式返回，不要包含其他内容：
 ```json
 [
-  {{"code": "AAPL", "rank": 1, "reason": "推荐理由（30字以内）"}},
+  {{"code": "代码", "rank": 1, "reason": "推荐理由（30字以内）"}},
   ...
 ]
 ```"""
@@ -507,22 +694,72 @@ class StockScannerService:
             self._fallback_select(task_id, top_codes)
             return
 
+        # Build human-readable archive text
+        analysis_text = self._format_llm_analysis(
+            task_id=task_id,
+            market=market,
+            input_count=len(cards),
+            selections=selections[:top_final],
+            raw_response=response_text,
+        )
+
         # Update database
+        from sqlalchemy import update as sa_update
         with self.repo.db.get_session() as session:
             for sel in selections[:top_final]:
                 code = sel.get("code", "")
                 rank = sel.get("rank", 0)
                 reason = sel.get("reason", "")
-                from sqlalchemy import update as sa_update
                 session.execute(
                     sa_update(ScannerCandidate)
                     .where(
                         ScannerCandidate.task_id == task_id,
                         ScannerCandidate.code == code,
                     )
-                    .values(llm_rank=rank, llm_reason=reason, llm_selected=True)
+                    .values(
+                        llm_rank=rank,
+                        llm_reason=reason,
+                        llm_selected=True,
+                        llm_analysis=analysis_text,
+                    )
                 )
             session.commit()
+
+    def _format_llm_analysis(
+        self,
+        task_id: str,
+        market: str,
+        input_count: int,
+        selections: List[Dict[str, Any]],
+        raw_response: str,
+    ) -> str:
+        """将 LLM 精选结果格式化为人类可读的存档文本。"""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        market_label = "A股" if market == "cn" else "美股"
+        lines = [
+            f"【LLM 精选分析存档】",
+            f"任务 ID : {task_id}",
+            f"时    间 : {now_str}",
+            f"市    场 : {market_label}",
+            f"输入候选 : {input_count} 只  →  精选 : {len(selections)} 只",
+            "",
+            "═" * 56,
+            "  精 选 结 果",
+            "═" * 56,
+        ]
+        for sel in selections:
+            rank = sel.get("rank", "-")
+            code = sel.get("code", "")
+            reason = sel.get("reason", "")
+            lines.append(f"  #{rank:>2}  {code:<10}  {reason}")
+        lines += [
+            "",
+            "─" * 56,
+            "  完整原始响应",
+            "─" * 56,
+            raw_response.strip(),
+        ]
+        return "\n".join(lines)
 
     def _parse_llm_selections(self, text: str) -> List[Dict[str, Any]]:
         """从 LLM 响应中解析 JSON 数组"""

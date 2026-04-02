@@ -71,6 +71,7 @@ class StatusCommand(BotCommand):
         status["ai_openai"] = bool(config.openai_api_key)
         
         # 搜索服务状态
+        status["search_miaoxiang"] = len(config.mx_api_keys) > 0
         status["search_bocha"] = len(config.bocha_api_keys) > 0
         status["search_tavily"] = len(config.tavily_api_keys) > 0
         status["search_brave"] = len(config.brave_api_keys) > 0
@@ -118,6 +119,7 @@ class StatusCommand(BotCommand):
             f"• OpenAI API: {icon(status['ai_openai'])}",
             "",
             "**🔍 搜索服务**",
+            f"• 东方财富妙想: {icon(status['search_miaoxiang'])}",
             f"• Bocha: {icon(status['search_bocha'])}",
             f"• Tavily: {icon(status['search_tavily'])}",
             f"• Brave: {icon(status['search_brave'])}",

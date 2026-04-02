@@ -30,6 +30,7 @@ export function useHomeDashboardState() {
       clearError: state.clearError,
       loadInitialHistory: state.loadInitialHistory,
       refreshHistory: state.refreshHistory,
+      refreshHistoryAndSelectLatest: state.refreshHistoryAndSelectLatest,
       loadMoreHistory: state.loadMoreHistory,
       selectHistoryItem: state.selectHistoryItem,
       toggleHistorySelection: state.toggleHistorySelection,

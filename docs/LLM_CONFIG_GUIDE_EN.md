@@ -12,7 +12,8 @@ Our LLM integration is powered by the robust and universal [LiteLLM](https://doc
 2. **[Advanced Users]** "I have several Keys, want to configure fallback models, and define custom Base URLs." -> [Go to Method 2: Channels Mode Config](#method-2-channels-mode-config-advancedmulti-model)
 3. **[Veterans]** "I want complex load balancing, request routing, and enterprise-level high availability!" -> [Go to Method 3: Advanced YAML Config](#method-3-advanced-yaml-config-expert-setup)
 4. **[Local Models]** "I want to use Ollama local models!" -> [Go to Example 4: Using Ollama Local Models](#example-4-using-ollama-local-models)
-5. **[Vision Models]** "I want to extract stock codes from images!" -> [Go to Vision Model Config](#advanced-feature-vision-model-config)
+5. **[Local Models]** "I want to use llama.cpp local models!" -> [Go to Example 5: Using llama.cpp Local Models](#example-5-using-llamacpp-local-models)
+6. **[Vision Models]** "I want to extract stock codes from images!" -> [Go to Vision Model Config](#advanced-feature-vision-model-config)
 
 ---
 
@@ -56,6 +57,16 @@ LITELLM_MODEL=ollama/qwen3:8b
 ```
 
 > **Important**: Ollama must be configured with `OLLAMA_API_BASE`. **Do not** use `OPENAI_BASE_URL`, or LiteLLM will incorrectly concatenate URLs (e.g. 404, `api/generate/api/show`). For remote Ollama, set `OLLAMA_API_BASE` to the actual address (e.g. `http://192.168.1.100:11434`). Requires LiteLLM ≥1.80.10 (matches requirements.txt).
+
+### Example 5: Using llama.cpp Local Models
+```env
+# llama-server (llama.cpp) listens on port 8080 by default, OpenAI-compatible API
+# Start it first: llama-server -m your-model.gguf --port 8080
+LITELLM_MODEL=openai/my-model
+OPENAI_BASE_URL=http://localhost:8080/v1
+```
+
+> **Note**: llama.cpp's `llama-server` provides a standard OpenAI-compatible API, so use the `openai/` prefix. The model name can be any string (llama-server only loads one model, so the name is just a label). You can also use the channel mode (see the llamacpp channel example below).
 
 > **Congratulations! If you're a beginner, you can stop reading here and run the program!**
 > Want to test the connection? Open your terminal in the root directory and run: `python test_env.py --llm`
@@ -109,6 +120,21 @@ LLM_OLLAMA_MODELS=qwen3:8b,llama3.2
 # 3. Specify primary model
 LITELLM_MODEL=ollama/qwen3:8b
 ```
+
+### Example: llama.cpp Channel Mode (Local Models, No API Key)
+```env
+# 1. Enable channel mode, declare llamacpp channel
+LLM_CHANNELS=llamacpp
+
+# 2. Configure llama-server address (default port 8080)
+LLM_LLAMACPP_BASE_URL=http://localhost:8080/v1
+LLM_LLAMACPP_MODELS=my-model
+
+# 3. Specify primary model
+LITELLM_MODEL=openai/my-model
+```
+
+> **Note**: The `llamacpp` channel routes through the OpenAI-compatible protocol internally and requires no API Key. Use `openai/` prefix in `LITELLM_MODEL`.
 
 > **Critical Warning**: If you enable `LLM_CHANNELS`, any standard `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` declared independently will be **completely ignored**. **Use only one mode** to prevent configuration conflicts.
 

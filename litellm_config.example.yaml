@@ -82,6 +82,12 @@ model_list:
   #     model: ollama/qwen3:8b
   #     api_base: http://localhost:11434
 
+  # --- llama.cpp 本地模型（llama-server，OpenAI 兼容）---
+  # - model_name: openai/my-model
+  #   litellm_params:
+  #     model: openai/my-model
+  #     api_base: http://localhost:8080/v1
+
 # ===================================
 # Router 设置（可选）
 # ===================================

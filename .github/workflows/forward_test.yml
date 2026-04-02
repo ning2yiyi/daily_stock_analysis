@@ -1,0 +1,167 @@
+name: 前瞻验证（选股胜率）
+
+on:
+  # 盘前选股：工作日北京时间 9:00 (UTC 1:00)
+  # 盘后验证：工作日北京时间 15:30 (UTC 7:30)
+  schedule:
+    - cron: '0 1 * * 1-5'    # 盘前选股 UTC 01:00 = 北京 09:00
+    - cron: '30 7 * * 1-5'   # 盘后验证 UTC 07:30 = 北京 15:30
+
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: '执行阶段'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - premarket     # 仅盘前选股
+          - postmarket    # 仅盘后验证
+          - both          # 两者都执行
+      market:
+        description: '扫描市场'
+        required: false
+        default: 'cn'
+        type: choice
+        options:
+          - cn
+          - us
+      date:
+        description: '指定日期 (YYYY-MM-DD, 留空=今天)'
+        required: false
+        type: string
+
+concurrency:
+  group: forward-test
+  cancel-in-progress: false
+
+jobs:
+  forward-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 创建必要目录
+        run: mkdir -p data logs reports
+
+      - name: 判断执行阶段
+        id: phase
+        run: |
+          MANUAL_PHASE="${{ github.event.inputs.phase }}"
+          if [ -n "$MANUAL_PHASE" ]; then
+            echo "phase=$MANUAL_PHASE" >> "$GITHUB_OUTPUT"
+          else
+            # 自动判断：UTC hour < 5 = 盘前，>= 5 = 盘后
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" -lt 5 ]; then
+              echo "phase=premarket" >> "$GITHUB_OUTPUT"
+            else
+              echo "phase=postmarket" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: 盘前选股+分析
+        if: steps.phase.outputs.phase == 'premarket' || steps.phase.outputs.phase == 'both'
+        env:
+          # AI 配置
+          LITELLM_CONFIG: ${{ vars.LITELLM_CONFIG || secrets.LITELLM_CONFIG }}
+          LITELLM_CONFIG_YAML: ${{ vars.LITELLM_CONFIG_YAML || secrets.LITELLM_CONFIG_YAML }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          LITELLM_MODEL: ${{ vars.LITELLM_MODEL || secrets.LITELLM_MODEL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-3-flash-preview' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AIHUBMIX_KEY: ${{ secrets.AIHUBMIX_KEY }}
+          # 搜索
+          MX_APIKEY: ${{ secrets.MX_APIKEY }}
+          BOCHA_API_KEYS: ${{ secrets.BOCHA_API_KEYS }}
+          TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+          SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
+          BRAVE_API_KEYS: ${{ secrets.BRAVE_API_KEYS }}
+          # 数据
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          # 通知
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_MAIN_CHANNEL_ID: ${{ secrets.DISCORD_MAIN_CHANNEL_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMAIL_SENDER: ${{ vars.EMAIL_SENDER || secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          # 系统
+          TRADING_DAY_CHECK_ENABLED: ${{ vars.TRADING_DAY_CHECK_ENABLED || 'true' }}
+          LOG_LEVEL: INFO
+        run: |
+          # LiteLLM 配置写入
+          if [ -n "$LITELLM_CONFIG_YAML" ] && [ -n "$LITELLM_CONFIG" ]; then
+            mkdir -p "$(dirname "$LITELLM_CONFIG")"
+            echo "$LITELLM_CONFIG_YAML" > "$LITELLM_CONFIG"
+          fi
+
+          MARKET="${{ github.event.inputs.market || 'cn' }}"
+          DATE_ARG=""
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            DATE_ARG="--date ${{ github.event.inputs.date }}"
+          fi
+
+          echo "🔍 盘前选股 (market=$MARKET)"
+          python scripts/forward_test_premarket.py \
+            --market "$MARKET" \
+            --top 10 \
+            --notify \
+            $DATE_ARG
+
+      - name: 盘后验证
+        if: steps.phase.outputs.phase == 'postmarket' || steps.phase.outputs.phase == 'both'
+        env:
+          # 通知渠道
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_MAIN_CHANNEL_ID: ${{ secrets.DISCORD_MAIN_CHANNEL_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMAIL_SENDER: ${{ vars.EMAIL_SENDER || secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          LOG_LEVEL: INFO
+        run: |
+          DATE_ARG=""
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            DATE_ARG="--date ${{ github.event.inputs.date }}"
+          fi
+
+          echo "📊 盘后验证"
+          python scripts/forward_test_postmarket.py \
+            --days 5 \
+            $DATE_ARG
+
+      - name: 上传数据库
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forward-test-db-${{ github.run_number }}
+          path: data/stock_analysis.db
+          retention-days: 30
+          if-no-files-found: ignore
