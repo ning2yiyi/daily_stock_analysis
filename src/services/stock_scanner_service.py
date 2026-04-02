@@ -21,6 +21,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -82,24 +83,77 @@ class ScanTask:
 # Universe providers
 # ---------------------------------------------------------------------------
 
+# Cache directory for offline fallback
+_CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_US_CACHE_FILE = _CACHE_DIR / "us_universe_cache.json"
+_US_CACHE_MAX_AGE_DAYS = 7
+
+
+def _load_us_cache() -> List[Tuple[str, str]]:
+    """Load US universe from local cache if fresh enough."""
+    try:
+        if not _US_CACHE_FILE.exists():
+            return []
+        data = json.loads(_US_CACHE_FILE.read_text(encoding="utf-8"))
+        cached_at = datetime.fromisoformat(data.get("cached_at", "2000-01-01"))
+        if datetime.now() - cached_at > timedelta(days=_US_CACHE_MAX_AGE_DAYS):
+            logger.info("US universe cache expired (cached_at=%s)", cached_at.date())
+            return []
+        tickers = [(t["ticker"], t["name"]) for t in data.get("tickers", [])]
+        logger.info("US universe loaded from cache (%d tickers, cached_at=%s)", len(tickers), cached_at.date())
+        return tickers
+    except Exception as exc:
+        logger.warning("Failed to read US universe cache: %s", exc)
+        return []
+
+
+def _save_us_cache(tickers: List[Tuple[str, str]]) -> None:
+    """Persist US universe to local cache."""
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        data = {
+            "cached_at": datetime.now().isoformat(),
+            "count": len(tickers),
+            "tickers": [{"ticker": t, "name": n} for t, n in tickers],
+        }
+        _US_CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("US universe cache saved (%d tickers)", len(tickers))
+    except Exception as exc:
+        logger.warning("Failed to save US universe cache: %s", exc)
+
+
+def _read_html_with_timeout(url: str, attrs: dict, timeout: int = 10) -> pd.DataFrame:
+    """Fetch HTML table via requests (proxy-aware, with timeout) then parse with pd.read_html."""
+    import io
+    import requests
+
+    resp = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (DSA StockScanner)"},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    dfs = pd.read_html(io.StringIO(resp.text), attrs=attrs)
+    return dfs[0]
+
+
 def fetch_us_universe() -> List[Tuple[str, str]]:
     """
     从网络动态获取标普500 + 纳斯达克100成分股列表。
+    网络失败时回退到本地缓存；成功获取后自动更新缓存。
 
     Returns:
         [(ticker, name), ...] 去重后约 550 只
     """
-    seen = set()
+    seen: set[str] = set()
     result: List[Tuple[str, str]] = []
 
-    # S&P 500 via yfinance/wikipedia
+    # S&P 500 via Wikipedia
     try:
-        import yfinance as yf
-        sp500 = pd.read_html(
+        sp500 = _read_html_with_timeout(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
             attrs={"id": "constituents"},
-            storage_options={"User-Agent": "Mozilla/5.0 (DSA StockScanner)"},
-        )[0]
+        )
         for _, row in sp500.iterrows():
             ticker = str(row.get("Symbol", "")).strip().replace(".", "-")
             name = str(row.get("Security", ticker)).strip()
@@ -112,11 +166,10 @@ def fetch_us_universe() -> List[Tuple[str, str]]:
 
     # Nasdaq-100
     try:
-        ndx = pd.read_html(
+        ndx = _read_html_with_timeout(
             "https://en.wikipedia.org/wiki/Nasdaq-100",
             attrs={"id": "constituents"},
-            storage_options={"User-Agent": "Mozilla/5.0 (DSA StockScanner)"},
-        )[0]
+        )
         added = 0
         for _, row in ndx.iterrows():
             ticker = str(row.get("Ticker", "")).strip().replace(".", "-")
@@ -129,10 +182,18 @@ def fetch_us_universe() -> List[Tuple[str, str]]:
     except Exception as exc:
         logger.warning("Failed to fetch Nasdaq-100 list: %s", exc)
 
-    if not result:
-        raise RuntimeError("Failed to fetch any US stock universe; check network")
+    # Success: save cache
+    if result:
+        _save_us_cache(result)
+        return result
 
-    return result
+    # Fallback: local cache
+    cached = _load_us_cache()
+    if cached:
+        logger.warning("Network fetch failed, using cached US universe (%d tickers)", len(cached))
+        return cached
+
+    raise RuntimeError("Failed to fetch any US stock universe; check network or enable proxy (USE_PROXY=true)")
 
 
 def fetch_cn_universe() -> List[Tuple[str, str]]:
@@ -454,12 +515,15 @@ class StockScannerService:
 
         bias_ma5 = (latest - latest_ma5) / latest_ma5 * 100 if latest_ma5 else 0
         bias_threshold = params["bias_threshold"]
-        if abs(bias_ma5) < 2:
-            bias_score = 25.0
-        elif abs(bias_ma5) < bias_threshold:
-            bias_score = 15.0
+        abs_bias = abs(bias_ma5)
+        if abs_bias < 2:
+            bias_score = 25.0   # 最佳买点区间
+        elif abs_bias < 3:
+            bias_score = 15.0   # 可正常介入
+        elif abs_bias < bias_threshold:
+            bias_score = 5.0    # 仅可小仓介入，与分析模块对齐
         else:
-            bias_score = 0.0
+            bias_score = 0.0    # 严禁追高
 
         vol_5 = volume.iloc[-5:].mean()
         vol_20 = volume.iloc[-20:].mean()
@@ -564,22 +628,36 @@ class StockScannerService:
                     pass
             stock_summaries.append(summary)
 
+        bias_rules = """   - 乖离率 < 2%：最佳买点区间，优先选入
+   - 乖离率 2-3%：可正常介入
+   - 乖离率 3-5%：仅可小仓追踪，应降低排名
+   - 乖离率 > 5%：严禁追高，必须排除！"""
+        entry_rules = """   - 最佳买入信号：缩量回踩 MA5 获得支撑后企稳
+   - 次优买入信号：回踩 MA10 获得支撑
+   - 观望信号：跌破 MA20"""
+
         if is_cn:
             analyst_role = "A股投资分析师"
             market_desc = "A股"
-            criteria = """1. 趋势健康度：多头排列稳固，不是已进入加速赶顶阶段
-2. 位置合理性：不追高，距离均线位置合理，乖离率适中
-3. 量价配合度：放量上涨/缩量回调优于缩量上涨，成交量能验证走势
-4. 资金面与板块：关注主力资金流入、所处板块热度
-5. 涨幅空间：近期涨幅不宜过大，有持续上涨的动力"""
+            criteria = f"""1. 趋势健康度：多头排列（MA5>MA10>MA20）稳固，不是已进入加速赶顶阶段
+2. 位置合理性（严格执行不追高原则）：
+{bias_rules}
+3. 买点质量（优先选择有回踩支撑信号的标的）：
+{entry_rules}
+4. 量价配合度：放量上涨/缩量回调优于缩量上涨，成交量能验证走势
+5. 资金面与板块：关注主力资金流入、所处板块热度
+6. 涨幅空间：近期涨幅不宜过大（20日涨幅超30%需警惕），有持续上涨的动力"""
         else:
             analyst_role = "美股投资分析师"
             market_desc = "美股"
-            criteria = """1. 趋势健康度：多头排列稳固，不是已进入加速赶顶阶段
-2. 位置合理性：不追高，距离均线位置合理
-3. 量价配合度：放量上涨/缩量回调优于缩量上涨
-4. 基本面支撑：PE/PB合理，非纯炒作标的
-5. 涨幅空间：近期涨幅不宜过大，避免高位接盘"""
+            criteria = f"""1. 趋势健康度：多头排列（MA5>MA10>MA20）稳固，不是已进入加速赶顶阶段
+2. 位置合理性（严格执行不追高原则）：
+{bias_rules}
+3. 买点质量（优先选择有回踩支撑信号的标的）：
+{entry_rules}
+4. 量价配合度：放量上涨/缩量回调优于缩量上涨
+5. 基本面支撑：PE/PB合理，非纯炒作标的
+6. 涨幅空间：近期涨幅不宜过大（20日涨幅超30%需警惕），避免高位接盘"""
 
         prompt = f"""你是一位专业的{analyst_role}。以下是通过量化初筛选出的 {len(cards)} 只{market_desc}候选股票：
 

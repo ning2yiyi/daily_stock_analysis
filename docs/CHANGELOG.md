@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [修复] 🐳 **Docker WebUI 运行时优先复用预构建静态资源** — `prepare_webui_frontend_assets()` 现在会先检查镜像内已有的 `static/index.html` 是否可直接复用；当容器运行时不包含 `apps/dsa-web` 源码目录且未安装 `npm` 时，也不会误报“未找到前端项目，无法自动构建”，从而恢复 Docker 部署后的 WebUI 打开能力。
 - [修复] 市场复盘生成链路将 LLM `max_tokens` 从 `2048` 提升到 `8192`，降低长复盘输出因 `MAX_TOKENS` 提前截断导致内容未完成的概率。
+- [新功能] 🦆 **新增 DuckDuckGo 免费搜索兜底** — 新增 `DuckDuckGoSearchProvider`，无需 API Key，安装 `duckduckgo_search` 库后自动启用；作为最低优先级兜底搜索引擎，解决零配置场景下 A 股新闻情报获取失败和美股数据覆盖不足的问题。
+- [修复] `get_search_service()` 单例缺失 `mx_keys` 参数，导致 Web/API 问股链路即使配置了 `MX_APIKEY` 也无法使用东方财富妙想搜索。
+- [新功能] 📊 **前瞻验证系统** — 新增选股→分析→收盘验证闭环：盘前自动扫描 A 股选出 Top 10 并运行分析，收盘后拉取实际涨跌验证选股命中率和方向命中率；支持滚动胜率统计和连续低胜率自动告警；新增 `BacktestRecord` 模型、`ForwardTestService` 服务、`scripts/forward_test_premarket.py`/`scripts/forward_test_postmarket.py` 脚本，以及 GitHub Actions 定时工作流 `.github/workflows/forward_test.yml`。
+- [改进] 选股模块评分与 LLM 精选 prompt 对齐分析模块「不追高」规则：bias 2-3% 独立档位（15 分），3-5% 降至 5 分；LLM prompt 注入明确乖离率阈值和回踩买点质量标准。
+- [修复] **适配妙想 API 新版响应结构** — `MiaoXiangSearchProvider` 兼容 `llmSearchResponse.data` 新嵌套格式，解析多条新闻（含标题、正文、日期、来源、原文链接），同时保留旧版 `trunk` 格式兜底；修复此前因结构不匹配导致返回空摘要的问题。
 
 ## [3.11.0] - 2026-03-27
 

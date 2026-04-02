@@ -5,6 +5,7 @@ import { useTaskStream } from './useTaskStream';
 type UseDashboardLifecycleOptions = {
   loadInitialHistory: () => Promise<void>;
   refreshHistory: (silent?: boolean) => Promise<void>;
+  refreshHistoryAndSelectLatest: () => Promise<void>;
   syncTaskCreated: (task: TaskInfo) => void;
   syncTaskUpdated: (task: TaskInfo) => void;
   syncTaskFailed: (task: TaskInfo) => void;
@@ -15,6 +16,7 @@ type UseDashboardLifecycleOptions = {
 export function useDashboardLifecycle({
   loadInitialHistory,
   refreshHistory,
+  refreshHistoryAndSelectLatest,
   syncTaskCreated,
   syncTaskUpdated,
   syncTaskFailed,
@@ -79,7 +81,7 @@ export function useDashboardLifecycle({
     onTaskStarted: syncTaskUpdated,
     onTaskCompleted: (task) => {
       syncTaskUpdated(task);
-      void refreshHistory(true);
+      void refreshHistoryAndSelectLatest();
       scheduleTaskRemoval(task.taskId, 2_000);
     },
     onTaskFailed: (task) => {

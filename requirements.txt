@@ -39,6 +39,7 @@ PyYAML>=6.0                 # YAML parser for LITELLM_CONFIG support
 # 搜索引擎（用于获取股票新闻）
 tavily-python>=0.3.0        # Tavily 搜索 API（每月 1000 次免费）
 google-search-results>=2.4.0  # SerpAPI（每月 100 次免费）
+duckduckgo_search>=7.0.0    # DuckDuckGo 搜索（免费，无需 API Key，兜底数据源）
 
 # 网络请求
 requests>=2.31.0            # HTTP 请求

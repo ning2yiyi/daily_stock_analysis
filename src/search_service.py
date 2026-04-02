@@ -672,10 +672,61 @@ class MiaoXiangSearchProvider(BaseSearchProvider):
                 success=False, error_message=hint,
             )
 
-        inner = data.get("data") or {}
-        title = inner.get("title", query)
-        trunk = inner.get("trunk", "")
-        secu_list = inner.get("secuList") or []
+        # API 响应有两种结构：
+        # 旧版: data -> {title, trunk, secuList}
+        # 新版: data -> {data: {llmSearchResponse: {data: [{title, content, date, source, jumpUrl, ...}]}}}
+        outer_data = data.get("data") or {}
+
+        # 尝试新版嵌套结构
+        nested_data = outer_data.get("data") or {}
+        llm_resp = nested_data.get("llmSearchResponse") or {}
+        news_items = llm_resp.get("data") or []
+
+        if news_items and isinstance(news_items, list):
+            # 新版结构：从 llmSearchResponse.data 中提取多条结果
+            results = []
+            for item in news_items[:max_results]:
+                if not isinstance(item, dict):
+                    continue
+                item_title = item.get("title", "")
+                item_content = item.get("content", "")
+                item_date = item.get("date")
+                item_source = item.get("source", "东方财富妙想")
+                item_url = item.get("jumpUrl", "https://ai.eastmoney.com/")
+
+                published_date = None
+                if item_date:
+                    try:
+                        # 日期格式："2026-03-31 23:20:00"
+                        dt = datetime.strptime(str(item_date)[:19], "%Y-%m-%d %H:%M:%S")
+                        published_date = dt.strftime("%Y-%m-%d")
+                    except (ValueError, AttributeError):
+                        published_date = str(item_date)[:10]
+
+                if not item_title and not item_content:
+                    continue
+
+                results.append(SearchResult(
+                    title=item_title or query,
+                    snippet=item_content[:2000],
+                    url=item_url,
+                    source=item_source,
+                    published_date=published_date,
+                ))
+
+            if results:
+                logger.info(
+                    "[东方财富妙想] 搜索完成，query='%s'，返回 %s 条结果（新版结构）",
+                    query, len(results),
+                )
+                return SearchResponse(
+                    query=query, results=results, provider=self.name, success=True,
+                )
+
+        # 旧版结构兜底：data -> {title, trunk, secuList}
+        title = outer_data.get("title", query)
+        trunk = outer_data.get("trunk", "")
+        secu_list = outer_data.get("secuList") or []
 
         snippet = self._extract_trunk_text(trunk)
 
@@ -1342,6 +1393,171 @@ class BraveSearchProvider(BaseSearchProvider):
             return '未知来源'
 
 
+class DuckDuckGoSearchProvider(BaseSearchProvider):
+    """
+    DuckDuckGo search provider (free, no API key required).
+
+    Uses the duckduckgo_search library for news and text search.
+    Serves as a zero-config fallback when no other provider is configured.
+    """
+
+    TIMEOUT_SECONDS = 10
+
+    def __init__(self):
+        super().__init__(["_no_key_needed_"], "DuckDuckGo")
+        self._ddgs = None
+
+    @property
+    def is_available(self) -> bool:
+        try:
+            from duckduckgo_search import DDGS  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def _get_ddgs(self):
+        if self._ddgs is None:
+            from duckduckgo_search import DDGS
+            self._ddgs = DDGS(timeout=self.TIMEOUT_SECONDS)
+        return self._ddgs
+
+    @staticmethod
+    def _time_period(days: int) -> str:
+        if days <= 1:
+            return "d"
+        if days <= 7:
+            return "w"
+        if days <= 30:
+            return "m"
+        return "y"
+
+    @staticmethod
+    def _extract_domain(url: str) -> str:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            domain = parsed.netloc.replace("www.", "")
+            return domain or "未知来源"
+        except Exception:
+            return "未知来源"
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        """Execute DuckDuckGo search."""
+        try:
+            ddgs = self._get_ddgs()
+            timelimit = self._time_period(days)
+
+            # Try news search first for better freshness
+            news_results: list = []
+            text_results: list = []
+            rate_limited = False
+            try:
+                news_results = list(ddgs.news(
+                    keywords=query,
+                    max_results=max_results,
+                    timelimit=timelimit,
+                ))
+            except Exception as e:
+                if "ratelimit" in str(type(e).__name__).lower() or "403" in str(e):
+                    rate_limited = True
+                    logger.debug("[DuckDuckGo] news 搜索触发频率限制: %s", e)
+
+            # Fall back to text search if news returns nothing and not rate-limited
+            if not news_results and not rate_limited:
+                try:
+                    text_results = list(ddgs.text(
+                        keywords=query,
+                        max_results=max_results,
+                        timelimit=timelimit,
+                    ))
+                except Exception as e:
+                    if "ratelimit" in str(type(e).__name__).lower() or "403" in str(e):
+                        rate_limited = True
+                        logger.debug("[DuckDuckGo] text 搜索触发频率限制: %s", e)
+
+            if rate_limited and not news_results and not text_results:
+                self._ddgs = None  # reset for next attempt
+                return SearchResponse(
+                    query=query,
+                    results=[],
+                    provider=self.name,
+                    success=False,
+                    error_message="DuckDuckGo 频率限制，请稍后重试",
+                )
+
+            raw_results = news_results or text_results
+            if not raw_results:
+                return SearchResponse(
+                    query=query,
+                    results=[],
+                    provider=self.name,
+                    success=True,
+                    error_message=None,
+                )
+
+            results = []
+            for item in raw_results:
+                url = item.get("url") or item.get("href") or ""
+                if not url:
+                    continue
+
+                title = item.get("title", "")
+                snippet = item.get("body", "") or item.get("snippet", "")
+                published_date = None
+                raw_date = item.get("date")
+                if raw_date:
+                    try:
+                        # DuckDuckGo news returns dates like "2026-04-01T12:00:00+00:00"
+                        dt = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+                        published_date = dt.strftime("%Y-%m-%d")
+                    except (ValueError, AttributeError):
+                        published_date = str(raw_date)[:10] if raw_date else None
+
+                results.append(
+                    SearchResult(
+                        title=title,
+                        snippet=snippet[:500],
+                        url=url,
+                        source=self._extract_domain(url),
+                        published_date=published_date,
+                    )
+                )
+                if len(results) >= max_results:
+                    break
+
+            return SearchResponse(
+                query=query,
+                results=results,
+                provider=self.name,
+                success=True,
+            )
+
+        except Exception as e:
+            # Reset client on error to allow re-initialization
+            self._ddgs = None
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=f"DuckDuckGo 搜索失败: {e}",
+            )
+
+    def search(self, query: str, max_results: int = 5, days: int = 7) -> SearchResponse:
+        """Execute DuckDuckGo search with timing."""
+        start_time = time.time()
+        response = self._do_search(query, "_no_key_", max_results, days=days)
+        response.search_time = time.time() - start_time
+        if response.success:
+            logger.info(
+                "[%s] 搜索 '%s' 成功，返回 %s 条结果，耗时 %.2fs",
+                self.name, query, len(response.results), response.search_time,
+            )
+        else:
+            logger.warning("[%s] 搜索失败: %s", self.name, response.error_message)
+        return response
+
+
 class SearXNGSearchProvider(BaseSearchProvider):
     """
     SearXNG search engine (self-hosted, no quota).
@@ -1785,6 +2001,7 @@ class SearchService:
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
         mx_keys: Optional[List[str]] = None,
+        duckduckgo_enabled: bool = True,
     ):
         """
         初始化搜索服务
@@ -1800,6 +2017,7 @@ class SearchService:
             news_max_age_days: 新闻最大时效（天）
             news_strategy_profile: 新闻窗口策略档位（ultra_short/short/medium/long）
             mx_keys: 东方财富妙想 API Key 列表（MX_APIKEY）
+            duckduckgo_enabled: 是否启用 DuckDuckGo 免费搜索兜底（默认 True）
         """
         self._providers: List[BaseSearchProvider] = []
         self.news_max_age_days = max(1, news_max_age_days)
@@ -1861,6 +2079,13 @@ class SearchService:
                 logger.info("已配置 SearXNG 搜索，共 %s 个自建实例", len(searxng_base_urls))
             else:
                 logger.info("已启用 SearXNG 公共实例自动发现模式")
+
+        # 7. DuckDuckGo（免费兜底，仅在无其他搜索引擎时启用，避免干扰已配置引擎的轮询逻辑）
+        if duckduckgo_enabled and not self._providers:
+            ddg_provider = DuckDuckGoSearchProvider()
+            if ddg_provider.is_available:
+                self._providers.append(ddg_provider)
+                logger.info("已启用 DuckDuckGo 搜索（零配置免费兜底）")
 
         if not self._providers:
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")
@@ -2849,6 +3074,7 @@ def get_search_service() -> SearchService:
             searxng_public_instances_enabled=config.searxng_public_instances_enabled,
             news_max_age_days=config.news_max_age_days,
             news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+            mx_keys=config.mx_api_keys,
         )
     
     return _search_service

@@ -35,6 +35,7 @@ describe('useDashboardLifecycle', () => {
       useDashboardLifecycle({
         loadInitialHistory,
         refreshHistory,
+        refreshHistoryAndSelectLatest: vi.fn().mockResolvedValue(undefined),
         syncTaskCreated: vi.fn(),
         syncTaskUpdated: vi.fn(),
         syncTaskFailed: vi.fn(),
@@ -67,6 +68,7 @@ describe('useDashboardLifecycle', () => {
       useDashboardLifecycle({
         loadInitialHistory: vi.fn().mockResolvedValue(undefined),
         refreshHistory: vi.fn().mockResolvedValue(undefined),
+        refreshHistoryAndSelectLatest: vi.fn().mockResolvedValue(undefined),
         syncTaskCreated: vi.fn(),
         syncTaskUpdated: vi.fn(),
         syncTaskFailed: vi.fn(),
@@ -91,14 +93,15 @@ describe('useDashboardLifecycle', () => {
   });
 
   it('refreshes history and removes completed tasks after the grace window', () => {
-    const refreshHistory = vi.fn().mockResolvedValue(undefined);
+    const refreshHistoryAndSelectLatest = vi.fn().mockResolvedValue(undefined);
     const syncTaskUpdated = vi.fn();
     const removeTask = vi.fn();
 
     renderHook(() =>
       useDashboardLifecycle({
         loadInitialHistory: vi.fn().mockResolvedValue(undefined),
-        refreshHistory,
+        refreshHistory: vi.fn().mockResolvedValue(undefined),
+        refreshHistoryAndSelectLatest,
         syncTaskCreated: vi.fn(),
         syncTaskUpdated,
         syncTaskFailed: vi.fn(),
@@ -114,7 +117,7 @@ describe('useDashboardLifecycle', () => {
     });
 
     expect(syncTaskUpdated).toHaveBeenCalledWith(completedTask);
-    expect(refreshHistory).toHaveBeenCalledWith(true);
+    expect(refreshHistoryAndSelectLatest).toHaveBeenCalled();
 
     act(() => {
       vi.advanceTimersByTime(2_000);
@@ -131,6 +134,7 @@ describe('useDashboardLifecycle', () => {
       useDashboardLifecycle({
         loadInitialHistory: vi.fn().mockResolvedValue(undefined),
         refreshHistory: vi.fn().mockResolvedValue(undefined),
+        refreshHistoryAndSelectLatest: vi.fn().mockResolvedValue(undefined),
         syncTaskCreated: vi.fn(),
         syncTaskUpdated: vi.fn(),
         syncTaskFailed,

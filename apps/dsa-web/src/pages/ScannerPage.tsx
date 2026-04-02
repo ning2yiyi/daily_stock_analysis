@@ -22,12 +22,12 @@ function num(v?: number | null, d = 2): string {
 
 const ScannerPage: React.FC = () => {
   const {
-    taskId,
+    market,
+    setMarket,
+    marketData,
     status,
     running,
     confirming,
-    candidates,
-    selectedCodes,
     error,
     startScan,
     loadCandidates,
@@ -38,8 +38,10 @@ const ScannerPage: React.FC = () => {
     reset,
   } = useScannerStore();
 
+  // Derive per-market data for the currently viewed market
+  const { taskId, candidates, selectedCodes } = marketData[market];
+
   const [confirmResult, setConfirmResult] = useState<{ added: string[]; stockList: string[] } | null>(null);
-  const [market, setMarket] = useState<'us' | 'cn'>('us');
 
   // Load latest candidates on mount
   useEffect(() => {
@@ -49,10 +51,15 @@ const ScannerPage: React.FC = () => {
     };
   }, [loadCandidates]);
 
+  const handleMarketSwitch = useCallback((m: 'us' | 'cn') => {
+    setMarket(m);
+    setConfirmResult(null);
+  }, [setMarket]);
+
   const handleStart = useCallback(() => {
     setConfirmResult(null);
-    startScan({ market });
-  }, [startScan, market]);
+    startScan();
+  }, [startScan]);
 
   const handleConfirm = useCallback(async () => {
     const result = await confirmSelected();
@@ -91,7 +98,7 @@ const ScannerPage: React.FC = () => {
               key={m}
               type="button"
               className={m === market ? 'btn-primary text-xs px-3 py-1' : 'btn-secondary text-xs px-3 py-1'}
-              onClick={() => setMarket(m)}
+              onClick={() => handleMarketSwitch(m)}
               disabled={running}
             >
               {m === 'us' ? '🇺🇸 美股' : '🇨🇳 A股'}
@@ -288,7 +295,7 @@ const ScannerPage: React.FC = () => {
       {!running && candidates.length === 0 && !error && (
         <Card className="py-16 text-center">
           <p className="text-secondary-text">
-            点击「开始扫描」，从标普500 + 纳斯达克100中筛选值得关注的标的
+            当前{market === 'us' ? '美股' : 'A股'}筛选列表为空，点击「开始扫描」从{market === 'us' ? '标普500 + 纳斯达克100' : '沪深300 + 中证500'}中筛选标的
           </p>
           <p className="mt-2 text-xs text-muted-text">
             量化初筛（MA多头/乖离率/量比/涨幅）→ LLM精选 Top 10 → 确认加入自选

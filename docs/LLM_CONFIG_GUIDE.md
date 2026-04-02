@@ -12,7 +12,8 @@
 2. **【进阶用户】** "我有好几个 Key，想配置备用模型，还要改自定义网址(Base URL)。" -> [指路【方式二：渠道(Channels)模式配置】](#方式二渠道channels模式配置适合进阶多模型)
 3. **【高玩老手】** "我要做复杂的负载均衡、请求路由、甚至多异构平台高可用！" -> [指路【方式三：YAML 高级配置】](#方式三yaml高级配置适合老手自定义)
 4. **【本地模型】** "我想用 Ollama 本地模型！" -> [指路【示例 4：使用 Ollama 本地模型】](#示例-4使用-ollama-本地模型)
-5. **【视觉模型】** "我想用图片识别股票代码！" -> [指路【扩展功能：看图模型(Vision)配置】](#扩展功能看图模型vision配置)
+5. **【本地模型】** "我想用 llama.cpp 本地模型！" -> [指路【示例 5：使用 llama.cpp 本地模型】](#示例-5使用-llamacpp-本地模型)
+6. **【视觉模型】** "我想用图片识别股票代码！" -> [指路【扩展功能：看图模型(Vision)配置】](#扩展功能看图模型vision配置)
 
 ---
 
@@ -56,6 +57,16 @@ LITELLM_MODEL=ollama/qwen3:8b
 ```
 
 > **重要**：Ollama 必须使用 `OLLAMA_API_BASE` 配置，**不要**使用 `OPENAI_BASE_URL`，否则会触发 LiteLLM 的 URL 拼接错误（如 404、`api/generate/api/show`）。远程 Ollama 时，将 `OLLAMA_API_BASE` 设为实际地址（如 `http://192.168.1.100:11434`）。需 LiteLLM ≥1.80.10（与 requirements.txt 一致）。
+
+### 示例 5：使用 llama.cpp 本地模型
+```env
+# llama.cpp 服务器（llama-server）默认监听 8080 端口，OpenAI 兼容 API
+# 先启动 llama-server: llama-server -m your-model.gguf --port 8080
+LITELLM_MODEL=openai/my-model
+OPENAI_BASE_URL=http://localhost:8080/v1
+```
+
+> **说明**：llama.cpp 的 `llama-server` 提供标准 OpenAI 兼容 API，因此使用 `openai/` 前缀。模型名称可以是任意字符串（llama-server 只加载了一个模型，不需要区分）。也可使用渠道模式（见下方示例）。
 
 > **恭喜！小白读到这里就可以去运行程序了！**
 > 想测测看通没通？在主目录打开命令行输入：`python test_env.py --llm`
@@ -109,6 +120,21 @@ LLM_OLLAMA_MODELS=qwen3:8b,llama3.2
 # 3. 指定主模型
 LITELLM_MODEL=ollama/qwen3:8b
 ```
+
+### 示例：llama.cpp 渠道模式（本地模型，无需 API Key）
+```env
+# 1. 开启渠道模式，声明 llamacpp 渠道
+LLM_CHANNELS=llamacpp
+
+# 2. 配置 llama-server 地址（默认 8080 端口）
+LLM_LLAMACPP_BASE_URL=http://localhost:8080/v1
+LLM_LLAMACPP_MODELS=my-model
+
+# 3. 指定主模型
+LITELLM_MODEL=openai/my-model
+```
+
+> **说明**：`llamacpp` 渠道内部通过 OpenAI 兼容协议路由，无需 API Key。模型名称在 `LITELLM_MODEL` 中使用 `openai/` 前缀。
 
 > **致命避坑说明**：如果你启用了 `LLM_CHANNELS`，那么你直接写在外面的 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 将**全部失效（系统一律无视）**！二者**选其一即可**，千万不要既写了新手模式又写了渠道模式结果产生冲突。
 

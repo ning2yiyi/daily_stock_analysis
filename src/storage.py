@@ -620,6 +620,51 @@ class LLMUsage(Base):
     called_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class BacktestRecord(Base):
+    """选股/分析回测验证记录"""
+
+    __tablename__ = 'backtest_records'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String(10), nullable=False, index=True)        # 交易日 YYYY-MM-DD
+    code = Column(String(16), nullable=False)
+    name = Column(String(64), nullable=True)
+    market = Column(String(8), nullable=False, default='cn')
+
+    # 盘前预测
+    scan_task_id = Column(String(64), nullable=True)             # 关联 scanner 任务
+    query_id = Column(String(64), nullable=True)                 # 关联 analysis 记录
+    quant_score = Column(Float, nullable=True)
+    llm_rank = Column(Integer, nullable=True)
+    operation_advice = Column(String(20), nullable=True)         # 买入/观望/卖出
+    sentiment_score = Column(Integer, nullable=True)             # 0-100
+    predicted_direction = Column(String(8), nullable=True)       # up/down/neutral
+    ideal_buy = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+
+    # 盘前快照
+    open_price = Column(Float, nullable=True)                    # 当日开盘价
+    pre_close = Column(Float, nullable=True)                     # 前收盘价
+
+    # 收盘后实际
+    close_price = Column(Float, nullable=True)
+    change_pct = Column(Float, nullable=True)                    # 涨跌幅 %
+    actual_direction = Column(String(8), nullable=True)          # up/down/flat
+
+    # 验证结果
+    scan_hit = Column(Boolean, nullable=True)                    # 选股命中（收涨）
+    direction_hit = Column(Boolean, nullable=True)               # 方向命中
+    validated = Column(Boolean, nullable=False, default=False)   # 是否已验证
+    validated_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_backtest_date_code', 'date', 'code'),
+        UniqueConstraint('date', 'code', name='uix_backtest_date_code'),
+    )
+
+
 class ScannerCandidate(Base):
     """选股扫描候选结果"""
 

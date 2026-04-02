@@ -36,6 +36,7 @@ const HomePage: React.FC = () => {
     clearError,
     loadInitialHistory,
     refreshHistory,
+    refreshHistoryAndSelectLatest,
     loadMoreHistory,
     selectHistoryItem,
     toggleHistorySelection,
@@ -62,6 +63,7 @@ const HomePage: React.FC = () => {
   useDashboardLifecycle({
     loadInitialHistory,
     refreshHistory,
+    refreshHistoryAndSelectLatest,
     syncTaskCreated,
     syncTaskUpdated,
     syncTaskFailed,

@@ -1,6 +1,7 @@
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { systemConfigApi } from '../../api/systemConfig';
+import { SystemConfigConflictError } from '../../api/systemConfig';
 import { useStockIndex } from '../../hooks/useStockIndex';
 import { Card } from '../common';
 import { DashboardPanelHeader } from '../dashboard';
@@ -41,6 +42,9 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
   const [codes, setCodes] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [deletingCode, setDeletingCode] = useState<string | null>(null);
+  const configVersionRef = useRef<string>('');
+  const maskTokenRef = useRef<string>('');
 
   // 复用股票索引，获取 displayCode → nameZh 映射（与 StockAutocomplete 共用同一份缓存）
   const { index } = useStockIndex();
@@ -57,6 +61,8 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
     setHasError(false);
     try {
       const res = await systemConfigApi.getConfig(false);
+      configVersionRef.current = res.configVersion;
+      maskTokenRef.current = res.maskToken;
       const raw = res.items.find((item) => item.key === 'STOCK_LIST')?.value ?? '';
       setCodes(raw.split(',').map((s) => s.trim()).filter(Boolean));
     } catch {
@@ -65,6 +71,29 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
       setIsLoading(false);
     }
   }, []);
+
+  const handleDelete = useCallback(async (codeToDelete: string) => {
+    setDeletingCode(codeToDelete);
+    try {
+      const newCodes = codes.filter((c) => c.toUpperCase() !== codeToDelete.toUpperCase());
+      const value = newCodes.join(',');
+      const res = await systemConfigApi.update({
+        configVersion: configVersionRef.current,
+        maskToken: maskTokenRef.current,
+        reloadNow: true,
+        items: [{ key: 'STOCK_LIST', value }],
+      });
+      configVersionRef.current = res.configVersion;
+      setCodes(newCodes);
+    } catch (e) {
+      if (e instanceof SystemConfigConflictError) {
+        // 版本冲突时重新加载
+        await load();
+      }
+    } finally {
+      setDeletingCode(null);
+    }
+  }, [codes, load]);
 
   useEffect(() => {
     void load();
@@ -116,17 +145,18 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
             {codes.map((code) => {
               const isActive = activeCode?.toUpperCase() === code.toUpperCase();
               const isBusy = analyzingCode?.toUpperCase() === code.toUpperCase();
+              const isDeleting = deletingCode?.toUpperCase() === code.toUpperCase();
               const nameZh = nameMap.get(normalizeCodeForLookup(code));
               return (
                 <button
                   key={code}
                   type="button"
-                  disabled={isBusy}
+                  disabled={isBusy || isDeleting}
                   onClick={() => onSelect(code)}
                   className={cn(
                     'group flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors',
                     isActive ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-hover',
-                    isBusy && 'cursor-wait opacity-60',
+                    (isBusy || isDeleting) && 'cursor-wait opacity-60',
                   )}
                   aria-label={`分析 ${nameZh ?? code}`}
                   aria-current={isActive ? 'true' : undefined}
@@ -142,22 +172,52 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
                   )}>
                     {nameZh ?? '—'}
                   </span>
-                  {/* 右侧状态图标 */}
+                  {/* 右侧：正常显示箭头，hover 显示删除按钮 */}
                   {isBusy ? (
                     <div
                       className="home-spinner h-3 w-3 flex-shrink-0 animate-spin border border-current"
                       aria-hidden="true"
                     />
-                  ) : (
-                    <svg
-                      className="h-3.5 w-3.5 flex-shrink-0 text-muted-text opacity-0 transition-opacity group-hover:opacity-100"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                  ) : isDeleting ? (
+                    <div
+                      className="home-spinner h-3 w-3 flex-shrink-0 animate-spin border border-current"
                       aria-hidden="true"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
+                    />
+                  ) : (
+                    <>
+                      {/* 箭头图标 - hover 时隐藏 */}
+                      <svg
+                        className="h-3.5 w-3.5 flex-shrink-0 text-muted-text opacity-0 transition-opacity group-hover:hidden"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                      {/* 删除图标 - hover 时显示 */}
+                      <span
+                        role="button"
+                        tabIndex={-1}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleDelete(code);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            void handleDelete(code);
+                          }
+                        }}
+                        className="hidden h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded text-muted-text transition-colors hover:text-red-500 group-hover:flex"
+                        aria-label={`删除自选股 ${nameZh ?? code}`}
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </span>
+                    </>
                   )}
                 </button>
               );
